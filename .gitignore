@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Data and model artifacts
+data/raw/*
+!data/raw/README.md
+data/processed/*
+!data/processed/README.md
+models/*
+!models/README.md
+artifacts/
+*.joblib
+*.pkl
+*.onnx
+
+# Airflow/runtime
+airflow/logs/
+airflow/airflow.db
+airflow/standalone_admin_password.txt
+logs/
+
+# Notebooks and tools
+.ipynb_checkpoints/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local reports and credentials
+*.log
+credentials*.json
+service-account*.json
+
