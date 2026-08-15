@@ -57,7 +57,10 @@ Denis avaliará inicialmente:
 1. [Medical Abstracts TC Corpus](https://www.kaggle.com/datasets/saharalaa/medical-abstracts-tc-corpus/data?select=medical_tc_train.csv)
 2. [MIMIC-III Clinical Database - Open Access](https://www.kaggle.com/datasets/ihssanened/mimic-iii-clinical-databaseopen-access)
 
-Contrato provisório: entre 2.000 e 5.000 registros, uma coluna `text` e uma coluna `target`, licença e origem documentadas. Dados brutos, processados e artefatos binários não devem ser enviados ao Git.
+Contrato: recorte reproduzível entre 2.000 e 5.000 registros, colunas `text` e `target`,
+sem duplicatas exatas ou leakage entre treino e teste. A decisão, a licença e o procedimento
+de preparação estão em [docs/dataset.md](docs/dataset.md). Dados brutos, processados e
+artefatos binários não devem ser enviados ao Git.
 
 Como os candidatos estão em inglês, a recomendação inicial é manter a inferência sem tradução online. Se entradas em português forem necessárias, a primeira alternativa será tradução offline, versionada e avaliada como parte da preparação dos dados. Isso evita adicionar custo, indisponibilidade, riscos de privacidade e latência ao caminho crítico da API.
 
