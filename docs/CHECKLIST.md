@@ -2,12 +2,12 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-08-12 — bootstrap arquitetural.
+Última atualização: 2026-08-14 — preparação reproduzível e documentação do dataset.
 
 ## Visão geral e responsáveis
 
 - [x] Repositório e arquitetura inicial — Fábio
-- [ ] EDA e escolha do dataset — Denis
+- [x] EDA e escolha do dataset — Denis
 - [ ] Classificador de texto — Bill
 - [ ] API FastAPI — Romário
 - [~] CI/CD, Docker e testes — Fábio
@@ -24,7 +24,7 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 - [x] Dados e modelos grandes excluídos do Git.
 - [ ] Histórico de commits semântico e organizado durante todo o projeto.
 - [ ] Instruções finais de execução reproduzidas em máquina limpa.
-- [ ] Licença/origem do dataset documentada.
+- [x] Licença/origem do dataset documentada.
 - [ ] Nenhum segredo ou dado clínico sensível versionado ou emitido em logs.
 - [ ] Ativar proteção da `main` após o primeiro CI verde: PR, checks, uma aprovação e bloqueio de force-push.
 
@@ -32,12 +32,12 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 
 ### Dataset e EDA — Denis
 
-- [ ] Comparar Medical Abstracts TC Corpus e MIMIC-III Open Access.
-- [ ] Confirmar licença, proveniência, schema e condições de uso.
-- [ ] Selecionar recorte entre 2.000 e 5.000 amostras (mínimo oficial: 2.000).
-- [ ] Documentar distribuição, duplicatas, ausências, comprimento dos textos e balanceamento.
-- [ ] Definir `text`, `target`, labels e estratégia de split sem leakage.
-- [ ] Registrar decisão e evidências; manter dados fora do Git.
+- [x] Comparar Medical Abstracts TC Corpus e MIMIC-III Open Access.
+- [x] Confirmar licença, proveniência, schema e condições de uso.
+- [x] Selecionar recorte entre 2.000 e 5.000 amostras (mínimo oficial: 2.000).
+- [x] Documentar distribuição, duplicatas, ausências, comprimento dos textos e balanceamento.
+- [x] Definir `text`, `target`, labels e estratégia de split sem leakage.
+- [x] Registrar decisão e evidências; manter dados fora do Git.
 
 Aceite: notebook/relatório reprodutível, dataset escolhido e contrato de dados aprovado.
 
