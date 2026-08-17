@@ -101,7 +101,7 @@ Os comandos da API, Airflow e stack de observabilidade serão acrescentados quan
 ## Checklist resumido
 
 - [x] Criar repositório e definir arquitetura inicial — Fábio
-- [ ] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
+- [x] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
 - [ ] Treinar classificador de texto — Bill
 - [ ] Construir API FastAPI — Romário
 - [~] Configurar CI/CD, Docker e testes — Fábio (CI inicial criado; Docker pendente)
