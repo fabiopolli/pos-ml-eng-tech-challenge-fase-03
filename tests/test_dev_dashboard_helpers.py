@@ -355,3 +355,68 @@ def test_render_model_sidebar_handles_empty_metrics(dashboard_module):
     assert mocks["expander"].call_count == 5
     # No dataframe when there's no per_class / label_mapping to show.
     assert mocks["dataframe"].call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Model picker (``GET /models`` + ``POST /reload``)
+# ---------------------------------------------------------------------------
+
+
+def test_list_models_hits_endpoint(dashboard_module):
+    """``_list_models`` GETs ``/models`` and returns the parsed payload."""
+
+    response = _FakeResponse(
+        status_code=200,
+        body={
+            "versions": ["20260823T120500Z-fedcba987654", "20260823T120000Z-0123456789ab"],
+            "current": "20260823T120000Z-0123456789ab",
+        },
+    )
+    with patch.object(dashboard_module.requests, "request", return_value=response) as mocked:
+        result = dashboard_module._list_models("http://api.example.com/")
+    method = mocked.call_args.kwargs.get("method") or mocked.call_args.args[0]
+    url = mocked.call_args.kwargs.get("url") or mocked.call_args.args[1]
+    assert method == "GET"
+    assert url == "http://api.example.com/models"
+    assert result.status_code == 200
+    assert result.body["current"] == "20260823T120000Z-0123456789ab"
+    assert result.body["versions"][0].startswith("2026")
+
+
+def test_reload_model_posts_json_payload(dashboard_module):
+    """``_reload_model`` POSTs ``{"model_version": ...}`` and parses the response."""
+
+    response = _FakeResponse(
+        status_code=200,
+        body={"model_version": "20260823T120500Z-fedcba987654", "model_loaded": True},
+    )
+    with patch.object(dashboard_module.requests, "request", return_value=response) as mocked:
+        result = dashboard_module._reload_model(
+            "http://api.example.com", "20260823T120500Z-fedcba987654"
+        )
+    method = mocked.call_args.kwargs.get("method") or mocked.call_args.args[0]
+    url = mocked.call_args.kwargs.get("url") or mocked.call_args.args[1]
+    assert method == "POST"
+    assert url == "http://api.example.com/reload"
+    assert mocked.call_args.kwargs["json"] == {"model_version": "20260823T120500Z-fedcba987654"}
+    assert result.status_code == 200
+    assert result.body["model_loaded"] is True
+
+
+def test_reload_model_surfaces_404(dashboard_module):
+    """A 404 from ``/reload`` must come back as ``ApiResponse`` (not raise)."""
+
+    response = _FakeResponse(
+        status_code=404,
+        body={
+            "request_id": "abc123",
+            "error_code": "model_not_found",
+            "message": "Requested model version was not found under models/.",
+            "detected_language": None,
+            "detected_language_score": None,
+        },
+    )
+    with patch.object(dashboard_module.requests, "request", return_value=response):
+        result = dashboard_module._reload_model("http://api.example.com", "unknown-version")
+    assert result.status_code == 404
+    assert result.body["error_code"] == "model_not_found"

@@ -158,6 +158,31 @@ def main() -> int:
             "headers_x_request_id": empty_resp.headers.get("x-request-id"),
         }
 
+        models_resp = client.get("/models")
+        models_resp.raise_for_status()
+        models_body = models_resp.json()
+
+        reload_success_resp = client.post(
+            "/reload", json={"model_version": models_body["versions"][0]}
+        )
+        if reload_success_resp.status_code != 200:
+            raise RuntimeError(
+                f"reload to first available version returned HTTP "
+                f"{reload_success_resp.status_code}, expected 200"
+            )
+        reload_success_body = reload_success_resp.json()
+
+        reload_not_found_resp = client.post(
+            "/reload",
+            json={"model_version": "99999999T999999Z-deadbeef0000"},
+        )
+        if reload_not_found_resp.status_code != 404:
+            raise RuntimeError(
+                f"reload to unknown version returned HTTP "
+                f"{reload_not_found_resp.status_code}, expected 404"
+            )
+        reload_not_found_body = reload_not_found_resp.json()
+
     # Strict-mode run: the actual langid scores for natural English
     # text are very low (per-token log probabilities), so we only raise
     # the bar inside the language-check section, where the detector is
@@ -187,6 +212,9 @@ def main() -> int:
             "git_dirty": model_info_body.get("git_dirty"),
             "created_at": model_info_body.get("created_at"),
         },
+        "models": models_body,
+        "reload_success": reload_success_body,
+        "reload_not_found": reload_not_found_body,
         "predictions": predict_records,
         "language_checks": language_records,
         "empty_text_request": empty_record,

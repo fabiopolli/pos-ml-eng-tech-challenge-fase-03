@@ -81,3 +81,41 @@ class ErrorOut(BaseModel):
     message: str
     detected_language: str | None = None
     detected_language_score: float | None = None
+
+
+class ReloadIn(BaseModel):
+    """Body for ``POST /reload``.
+
+    ``model_version`` must match the immutable schema
+    ``YYYYMMDDTHHMMSSZ-<12 hex>`` and correspond to a directory under
+    ``models/`` containing a validated ``model.joblib`` + ``metadata.json``.
+    """
+
+    model_version: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    ]
+
+
+class ReloadOut(BaseModel):
+    """Response for ``POST /reload``.
+
+    Mirrors ``HealthOut`` so the dashboard can refresh both blocks from
+    the same payload. ``model_version`` echoes the validated version
+    (may differ from the requested one when the artifact directory name
+    does not match ``metadata.model_version``).
+    """
+
+    model_version: str
+    model_loaded: bool
+
+
+class ModelsListOut(BaseModel):
+    """Response for ``GET /models``.
+
+    Lists every immutable artifact version discovered under ``models/``,
+    newest first. Excludes the legacy ``v1/`` directory.
+    """
+
+    versions: list[str]
+    current: str | None = None

@@ -15,8 +15,8 @@ Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — F
 - Modelo baseline: TF-IDF + **LinearSVC**, escolhido por macro-F1 em validação cruzada estratificada de 5 folds somente no treino (LinearSVC `0.7335` vs LogisticRegression `0.7319`). O `test set` permaneceu vedado até a avaliação final.
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
-- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana).
-- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **58 testes verdes** em `uv run pytest`.
+- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana). O endpoint `/reload` permite trocar o holder em runtime após re-validar manifesto + checksum (`ModelHolder.reload_to`); falhas preservam o modelo anterior.
+- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **67 testes verdes** em `uv run pytest`.
 - Lint e formatação verdes (`ruff check .` / `ruff format .`).
 
 ## 2. Escopo e alinhamento com o plano
@@ -187,10 +187,12 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
 
 ### 5.1 Comportamento
 
-`src/triage_ml/dev_api/app.py` expõe `GET /health`, `GET /model-info` e `POST /predict`. A API consome o artefato real treinado em `models/<versão>/model.joblib` (validado por checksum e manifesto). Não é um stub. Características:
+`src/triage_ml/dev_api/app.py` expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict`. A API consome o artefato real treinado em `models/<versão>/model.joblib` (validado por checksum e manifesto). Não é um stub. Características:
 
 - **`/health`**: retorna `HealthOut(status, model_version, model_loaded)`. Se o artefato não carregar, a aplicação **não sobe** (`RuntimeError` no `lifespan`).
 - **`/model-info`** (`GET`): retorna `ModelInfoOut` com o manifesto validado do artefato (`metadata.json` validado por `validate_metadata`). Inclui `model_version`, `model_name`, `task_type`, `language`, `classes`, `label_mapping`, `random_state`, `n_train`, `n_test`, `metrics` (com `per_class`), `preprocessing`, `selection` (com `candidates` do CV 5-fold no treino), `dependency_versions`, `git_commit`, `git_dirty` e `created_at`. Útil para o dashboard de desenvolvimento e para ferramentas de validação inspecionarem o modelo em uso sem tocar o filesystem. Quando o artefato não está carregado, devolve `503 model_not_ready`.
+- **`/models`** (`GET`): lista as versões imutáveis disponíveis em `models/` (newest-first) via `_list_model_versions()` e devolve `ModelsListOut(versions, current)`. Read-only, sem efeito colateral.
+- **`/reload`** (`POST {"model_version": "..."}`): chama `ModelHolder.reload_to(version)` que resolve `<repo>/models/<version>/model.joblib`, re-executa `load_artifact` (manifesto + checksum + classes) e só então substitui os campos do holder. Em caso de falha (`FileNotFoundError`, `RuntimeError` do checksum, etc.) o holder anterior permanece em uso. Erros: `404 model_not_found` para versão inexistente e `500 model_incompatible` para falha de validação. Habilita o model picker do dashboard de desenvolvimento.
 - **`/predict`** (`POST {"text": "..."}`):
   - `text` é normalizado via `Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20000)]`.
   - Inferência registrada em `latency_ms` com `time.perf_counter`.
@@ -242,14 +244,14 @@ Cobertura por arquivo:
 | `tests/test_model_pipeline.py` | 9 | `build_pipeline` (TF-IDF defaults, LR com `predict_proba`, LinearSVC com `class_weight=balanced`), end-to-end em corpus sintético |
 | `tests/test_model_artifact.py` | 12 | `ArtifactPaths`, `file_sha256`, `write_classes` (com `_coerce` de `numpy.int64`), `read_classes`, `validate_metadata` (campos obrigatórios), `verify_artifact_integrity` (caso feliz, model swap, checksum ausente), `load_artifact` |
 | `tests/test_model_training.py` | 1 | Integração `run_training + load_artifact` em dataset sintético, garantindo `selection.candidates = {logreg, linear_svc}`, `test_set_used_for_selection=False`, balanced_accuracy presente, `pipeline.classes_ == metadata.classes` |
-| `tests/test_dev_api.py` | 9 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado, `/model-info` retorna manifesto validado e 503 quando o artefato não está carregado |
+| `tests/test_dev_api.py` | 15 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado, `/model-info` retorna manifesto validado e 503 quando o artefato não está carregado, `/models` lista newest-first e tolera `models/` ausente, `/reload` troca o holder e devolve 404 `model_not_found` para versão inexistente, `ModelHolder.reload_to` recusa-se a mutar o holder em falha |
 | `tests/test_dev_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
-| `tests/test_dev_dashboard_helpers.py` | 12 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `_get_model_info`, `_render_model_sidebar`, `_format_pct`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`, atalhos de documentação, raiz do repo) — mocka `requests.request` e `streamlit.*`, não precisa de API rodando |
+| `tests/test_dev_dashboard_helpers.py` | 15 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `_get_model_info`, `_render_model_sidebar`, `_format_pct`, `_list_models`, `_reload_model`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`, atalhos de documentação, raiz do repo) — mocka `requests.request` e `streamlit.*`, não precisa de API rodando |
 
 Comando único:
 
 ```bash
-uv run pytest   # 58 passed in ~3s
+uv run pytest   # 67 passed in ~3s
 uv run ruff check .
 uv run ruff format .
 ```
@@ -267,6 +269,7 @@ Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/
 **Sidebar**:
 
 - **Conexão** — URL base da API + botão "Atualizar health".
+- **🔁 Trocar modelo** — consome `GET /models`, lista as versões imutáveis disponíveis em `models/` (newest-first), mostra a atualmente em uso, deixa o usuário escolher outra via `<selectbox>` e dispara `POST /reload`. Em sucesso, força o refresh dos blocos abaixo (`/health`, `/models`, `/model-info`). Em erro (`404 model_not_found`, `500 model_incompatible`), exibe a mensagem em vermelho sem alterar o holder. Estado apenas em `st.session_state` — não persiste entre sessões Streamlit.
 - **🧠 Modelo** — consome `GET /model-info` e renderiza, em cinco expanders:
   - **Identidade** — `model_version`, `model_name`, `task_type`, `language`.
   - **Treinamento** — métricas `n_train`/`n_test` via `st.metric`, `random_state`, `git_commit` (com marcação `(dirty)` quando aplicável), `created_at` e `dependency_versions`.

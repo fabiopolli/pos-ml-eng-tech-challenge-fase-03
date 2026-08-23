@@ -21,6 +21,7 @@ Dashboard Streamlit que fala HTTP com qualquer instância da API
 **Sidebar**:
 
 - **🔌 Conexão** — URL base da API + botão para revalidar `/health`.
+- **🔁 Trocar modelo** — consome `GET /models` para listar as versões imutáveis disponíveis em `models/` (newest-first), mostra a versão atualmente em uso, deixa você escolher outra via `<selectbox>` e dispara `POST /reload`. Resposta bem-sucedida força o refresh dos blocos abaixo; resposta `404 model_not_found` ou `500 model_incompatible` mostra o erro em vermelho. Estado apenas em memória (limpa ao reiniciar o Streamlit).
 - **🧠 Modelo** — consome `GET /model-info` e mostra, em expanders:
   identidade do artefato (`model_version`, `model_name`, `task_type`,
   `language`), treinamento (`n_train`, `n_test`, `random_state`,

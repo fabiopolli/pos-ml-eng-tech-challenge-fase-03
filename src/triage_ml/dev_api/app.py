@@ -29,7 +29,16 @@ from fastapi.responses import JSONResponse
 
 from triage_ml.dev_api.config import get_api_config
 from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
-from triage_ml.dev_api.schemas import ErrorOut, HealthOut, ModelInfoOut, PredictIn, PredictOut
+from triage_ml.dev_api.schemas import (
+    ErrorOut,
+    HealthOut,
+    ModelInfoOut,
+    ModelsListOut,
+    PredictIn,
+    PredictOut,
+    ReloadIn,
+    ReloadOut,
+)
 from triage_ml.models.artifact import load_artifact
 
 logger = logging.getLogger("triage_ml.dev_api")
@@ -56,6 +65,28 @@ def _default_model_path() -> Path:
     return models_dir / "v1" / "model.joblib"
 
 
+def _list_model_versions() -> list[str]:
+    """Return all immutable artifact versions available under ``models/``.
+
+    The listing is ordered newest-first (matching ``_default_model_path``)
+    and filters out the legacy ``v1/`` directory that no longer satisfies
+    the validated manifest contract. Useful for the dashboard's
+    model-picker and for the ``GET /models`` endpoint.
+    """
+
+    models_dir = REPO_ROOT / "models"
+    if not models_dir.exists():
+        return []
+    return sorted(
+        (
+            path.name
+            for path in models_dir.iterdir()
+            if path.is_dir() and VERSION_DIR_PATTERN.fullmatch(path.name)
+        ),
+        reverse=True,
+    )
+
+
 class ModelHolder:
     """Load and publish a model only after full artifact validation."""
 
@@ -80,6 +111,32 @@ class ModelHolder:
         self.label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
         self.model_version = metadata["model_version"]
         self.pipeline = pipeline
+
+    def reload_to(self, version: str) -> None:
+        """Atomically swap the holder to a different immutable artifact version.
+
+        The new path is resolved against the ``models/`` directory and
+        must obey ``VERSION_DIR_PATTERN``; ``load_artifact`` re-runs the
+        full validation (manifest, checksum, classes) before the swap
+        actually commits, so the holder never observes a half-loaded
+        state. Raises ``FileNotFoundError`` if the version is unknown
+        and propagates any ``RuntimeError`` from ``load_artifact`` when
+        the artifact is incompatible.
+        """
+
+        if not VERSION_DIR_PATTERN.fullmatch(version):
+            raise FileNotFoundError(f"unknown model version: {version!r}")
+        new_path = REPO_ROOT / "models" / version / "model.joblib"
+        if not new_path.is_file():
+            raise FileNotFoundError(f"unknown model version: {version!r}")
+        # ``load_artifact`` is responsible for the validation; on success
+        # it returns the pipeline + metadata we need to publish.
+        pipeline, metadata = load_artifact(new_path)
+        self.pipeline = pipeline
+        self.metadata = metadata
+        self.label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
+        self.model_version = metadata["model_version"]
+        self.model_path = new_path
 
     @property
     def loaded(self) -> bool:
@@ -150,11 +207,15 @@ def create_app(
             "validation_failed",
             "prediction_failed",
             "model_not_ready",
+            "model_not_found",
+            "model_incompatible",
         } | language_codes
         error_code = exc.detail if exc.detail in allowed_codes else "request_failed"
         message = "Request could not be processed."
         if error_code in language_codes:
             message = "Only English texts are supported."
+        elif error_code == "model_not_found":
+            message = "Requested model version was not found under models/."
         detected_language: str | None = None
         detected_language_score: float | None = None
         # Attach the detector's verdict when the route populated it.
@@ -196,6 +257,17 @@ def create_app(
             model_loaded=holder.loaded,
         )
 
+    @app.get("/models", response_model=ModelsListOut)
+    async def list_models() -> ModelsListOut:
+        """List every immutable artifact version available under ``models/``.
+
+        Pure read-only endpoint — does not touch the loaded pipeline.
+        Returns the version list newest-first and echoes the currently
+        loaded version so the dashboard can preselect it in a picker.
+        """
+
+        return ModelsListOut(versions=_list_model_versions(), current=holder.model_version)
+
     @app.get("/model-info", response_model=ModelInfoOut)
     async def model_info() -> ModelInfoOut:
         """Expose the validated artifact manifest.
@@ -213,6 +285,43 @@ def create_app(
                 detail="model_not_ready",
             )
         return ModelInfoOut(**holder.metadata)
+
+    @app.post("/reload", response_model=ReloadOut)
+    async def reload_model(payload: ReloadIn) -> ReloadOut:
+        """Swap the holder to a different validated artifact version.
+
+        Body: ``{"model_version": "YYYYMMDDTHHMMSSZ-<12hex>"}``. The new
+        artifact must already exist under ``models/<version>/``; the
+        reload re-runs ``load_artifact`` so a failed validation aborts
+        before the holder is mutated.
+
+        Errors:
+
+        * ``404 model_not_found`` — version is unknown or malformed.
+        * ``500 model_incompatible`` — manifest, checksum or class
+          mismatch on the requested version; the previous model stays
+          loaded (the swap is rejected, not partially applied).
+        """
+
+        version = payload.model_version
+        try:
+            holder.reload_to(version)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="model_not_found",
+            ) from exc
+        except (
+            RuntimeError,
+            Exception,
+        ) as exc:  # ``load_artifact`` raises multiple exception types
+            logger.error("model reload to %s failed: %s", version, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="model_incompatible",
+            ) from exc
+        logger.info("model reload to %s succeeded", holder.model_version)
+        return ReloadOut(model_version=holder.model_version or "", model_loaded=holder.loaded)
 
     @app.post("/predict", response_model=PredictOut)
     async def predict(payload: PredictIn, request: Request) -> PredictOut:

@@ -183,6 +183,8 @@ Endpoints:
 
 - `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`. Se o artefato estiver ausente ou inválido, a aplicação **não sobe** (RuntimeError no startup).
 - `GET /model-info` → manifesto validado do artefato (`model_version`, `model_name`, `task_type`, `language`, `classes`, `label_mapping`, `random_state`, `n_train`, `n_test`, `metrics`, `preprocessing`, `selection`, `dependency_versions`, `git_commit`, `git_dirty`, `created_at`). Retorna `503 model_not_ready` se o artefato não estiver carregado. Permite que ferramentas externas inspecionem o que está em inferência sem tocar o filesystem.
+- `GET /models` → lista de versões imutáveis disponíveis em `models/` (newest-first) + a versão atualmente em uso. Read-only, sem efeito colateral.
+- `POST /reload` → corpo `{"model_version": "YYYYMMDDTHHMMSSZ-<12hex>"}`. Troca o holder da API para a versão solicitada após re-validar manifesto + checksum. Retorna `404 model_not_found` se a versão não existe ou `500 model_incompatible` se a validação falhar (o holder anterior permanece em uso). Habilita o model picker do dashboard.
 - `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` com HTTP 422 e nunca vazam o texto clínico.
 - Toda resposta de predição traz `X-Request-ID` (gerado internamente) e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo), prontos para a Etapa 6 (Prometheus/Grafana).
 
@@ -215,6 +217,7 @@ Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em 
 **Sidebar:**
 
 - **Conexão** — URL base da API + botão "Atualizar health".
+- **🔁 Trocar modelo** — consome `GET /models` para listar versões imutáveis disponíveis em `models/`, mostra a versão em uso, deixa selecionar outra via `<selectbox>` e dispara `POST /reload`. Estado apenas em memória.
 - **🧠 Modelo** — consome `GET /model-info` e exibe, em expanders, a identidade do artefato carregado (`model_version`, `model_name`, `task_type`, `language`), dados de treinamento (`n_train`, `n_test`, `random_state`, `git_commit`, `created_at`, `dependency_versions`), a seleção do classificador (candidatos `logreg` × `linear_svc` com `mean_macro_f1 ± std`) e as métricas (`accuracy`, `balanced_accuracy`, `macro_f1`, `weighted_f1` globais + tabela per-classe com precision/recall/F1/support).
 - **📚 Atalhos** — links `file://` para o Plan do classificador, Checklist oficial e Relatório Fase 1.
 

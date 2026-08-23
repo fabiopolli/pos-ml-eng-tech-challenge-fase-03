@@ -176,6 +176,33 @@ def _get_model_info(api_url: str) -> ApiResponse:
     return _request_json("GET", f"{api_url.rstrip('/')}/model-info")
 
 
+def _list_models(api_url: str) -> ApiResponse:
+    """Return ``GET /models`` against the configured API.
+
+    Pure read-only endpoint listing every immutable artifact version
+    available under ``models/`` (newest first) plus the version the
+    API is currently serving.
+    """
+
+    return _request_json("GET", f"{api_url.rstrip('/')}/models")
+
+
+def _reload_model(api_url: str, model_version: str) -> ApiResponse:
+    """Return ``POST /reload`` against the configured API.
+
+    Body: ``{"model_version": "<version>"}``. On success the API swaps
+    the holder to the new version (re-validating manifest + checksum)
+    and returns the new ``model_version``. Errors map to ``404
+    model_not_found`` or ``500 model_incompatible``.
+    """
+
+    return _request_json(
+        "POST",
+        f"{api_url.rstrip('/')}/reload",
+        payload={"model_version": model_version},
+    )
+
+
 def _render_response(response: ApiResponse, *, expected_error_code: str | None) -> None:
     """Render the API response with the same shape regardless of status."""
 
@@ -388,6 +415,97 @@ def main() -> None:
 
         if st.button("🔄 Atualizar health", use_container_width=True):
             st.session_state["force_health"] = True
+
+        st.markdown("---")
+        st.markdown("### 🔁 Trocar modelo")
+        st.caption(
+            "Lista as versões imutáveis disponíveis em `models/` e troca "
+            "o holder da API via `POST /reload`. Estado só desta sessão."
+        )
+
+        if st.button("🔄 Listar versões", use_container_width=True, key="refresh_models"):
+            st.session_state["force_models_list"] = True
+
+        versions_error: str | None = None
+        versions_payload: dict[str, Any] | None = st.session_state.get("models_payload")
+        if versions_payload is None or st.session_state.get("force_models_list"):
+            try:
+                with st.spinner("Chamando /models ..."):
+                    response = _list_models(api_url)
+            except requests.RequestException as exc:
+                versions_error = f"Falha ao chamar /models: {exc}"
+            else:
+                if response.status_code == SUCCESS_STATUS and isinstance(response.body, dict):
+                    versions_payload = response.body
+                    st.session_state["models_payload"] = response.body
+                    st.session_state["force_models_list"] = False
+                else:
+                    versions_error = (
+                        f"/models respondeu HTTP {response.status_code}: "
+                        f"{response.body.get('error_code', '—')}"
+                    )
+                st.session_state["force_models_list"] = False
+
+        if versions_error is not None:
+            st.error(versions_error)
+        elif isinstance(versions_payload, dict):
+            versions_list: list[str] = list(versions_payload.get("versions") or [])
+            current_version: str | None = versions_payload.get("current")
+            if not versions_list:
+                st.info("Nenhuma versão disponível em `models/`.")
+            else:
+                # Default the picker to the currently loaded version so the
+                # dashboard never starts with an empty selection; otherwise
+                # default to the first (newest) version.
+                default_index = 0
+                if current_version and current_version in versions_list:
+                    default_index = versions_list.index(current_version)
+                # ``st.session_state`` keeps the picker choice stable across
+                # reruns triggered by unrelated widgets (e.g. the text input).
+                picker_key = "model_picker_selection"
+                if (
+                    picker_key not in st.session_state
+                    or st.session_state[picker_key] not in versions_list
+                ):
+                    st.session_state[picker_key] = versions_list[default_index]
+                selected_version = st.selectbox(
+                    "Versão para servir",
+                    versions_list,
+                    key=picker_key,
+                    help="A versão atual está destacada pelo botão 'Servir esta versão'.",
+                )
+                if current_version:
+                    st.caption(f"Atualmente servindo: `{current_version}`")
+                if st.button(
+                    "🚀 Servir esta versão",
+                    type="primary",
+                    use_container_width=True,
+                    key="serve_version",
+                ):
+                    try:
+                        with st.spinner(f"Chamando POST /reload ({selected_version}) ..."):
+                            reload_response = _reload_model(api_url, selected_version)
+                    except requests.RequestException as exc:
+                        st.error(f"Falha ao chamar /reload: {exc}")
+                    else:
+                        if reload_response.status_code == SUCCESS_STATUS:
+                            new_version = reload_response.body.get(
+                                "model_version", selected_version
+                            )
+                            st.success(f"API agora está servindo `{new_version}`.")
+                            # Force both downstream blocks to refresh on the
+                            # next rerun so the sidebar reflects the swap.
+                            st.session_state["force_model_info"] = True
+                            st.session_state["force_models_list"] = True
+                            st.session_state["force_health"] = True
+                        else:
+                            error_code = reload_response.body.get("error_code", "—")
+                            st.error(
+                                f"Reload falhou (HTTP {reload_response.status_code}, "
+                                f"`error_code={error_code}`)."
+                            )
+        else:
+            st.info("Lista de versões indisponível. Clique em 'Listar versões'.")
 
         st.markdown("---")
         st.markdown("### 🧠 Modelo")

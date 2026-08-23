@@ -16,7 +16,15 @@ VERSION = "20260823T120000Z-0123456789ab"
 DIGEST = "a" * 64
 
 
-def _artifact(tmp_path: Path) -> Path:
+def _artifact(tmp_path: Path, *, version: str = VERSION) -> Path:
+    """Write a single validated artifact under ``tmp_path/<version>/model.joblib``.
+
+    ``tmp_path`` is the parent directory of the version directory — i.e.
+    ``tmp_path`` should be ``<repo>/models`` when constructing a fixture
+    for the dashboard picker. The default ``version`` matches the
+    top-level ``VERSION`` constant so existing callers stay compatible.
+    """
+
     pipeline = build_pipeline(
         "logreg",
         tfidf={"ngram_range": (1, 1), "min_df": 1, "max_df": 1.0},
@@ -30,12 +38,12 @@ def _artifact(tmp_path: Path) -> Path:
     ] * 2
     labels = [1, 2, 3, 4, 5] * 2
     pipeline.fit(texts, labels)
-    paths = ArtifactPaths.for_version(tmp_path, VERSION)
+    paths = ArtifactPaths.for_version(tmp_path, version)
     paths.ensure()
     joblib.dump(pipeline, paths.joblib)
     write_classes(paths.classes, pipeline.classes_)
     metadata = build_metadata(
-        model_version=VERSION,
+        model_version=version,
         model_name="tiny",
         task_type="multiclass_text_classification",
         language="en",
@@ -283,3 +291,139 @@ def test_model_info_returns_503_when_artifact_missing(tmp_path: Path) -> None:
     assert body["error_code"] == "model_not_ready"
     assert body["request_id"]
     assert "could not be processed" in body["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Model picker (``GET /models`` + ``POST /reload``)
+# ---------------------------------------------------------------------------
+
+
+VERSION_B = "20260823T120500Z-fedcba987654"
+
+
+def _second_artifact(repo_root: Path, version: str = VERSION_B) -> Path:
+    """Write a second immutable artifact under ``<repo_root>/models/<version>/``.
+
+    The dashboard tests need at least two versions to exercise the picker.
+    We build a brand new pipeline + manifest with the supplied version
+    so ``validate_metadata`` accepts it without changes.
+    """
+
+    models_dir = repo_root / "models"
+    return _artifact(models_dir, version=version)
+
+
+# ``_artifact`` writes to ``<parent>/<version>/model.joblib``, so the
+# caller passes the models dir and the desired version. Both fixtures
+# above funnel through the same helper to keep checksum / manifest
+# validation uniform.
+
+
+def test_list_models_returns_newest_first_and_marks_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``GET /models`` lists every version and tags the one in the holder."""
+
+    monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", tmp_path)
+    holder_path = _artifact(tmp_path / "models", version=VERSION)
+    _second_artifact(tmp_path)
+    # ``VERSION_B`` has a slightly later timestamp, so it must come first.
+    assert VERSION_B > VERSION
+    holder = ModelHolder(holder_path)
+    with TestClient(create_app(holder=holder)) as test_client:
+        response = test_client.get("/models")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["versions"] == [VERSION_B, VERSION]
+    assert body["current"] == VERSION
+
+
+def test_list_models_when_models_dir_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``GET /models`` returns an empty list (not 500) when ``models/`` is gone."""
+
+    empty_root = tmp_path / "empty_repo"
+    empty_root.mkdir()
+    monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", empty_root)
+    holder_path = _artifact(tmp_path / "models", version=VERSION)
+    holder = ModelHolder(holder_path)
+    with TestClient(create_app(holder=holder)) as test_client:
+        response = test_client.get("/models")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["versions"] == []
+    # The holder still reports its loaded version even if the directory
+    # disappeared afterwards — useful for surfacing state to the client.
+    assert body["current"] == VERSION
+
+
+def test_reload_swaps_holder_and_health_reflects_new_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``POST /reload`` validates the new version and updates the holder."""
+
+    monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", tmp_path)
+    holder_path = _artifact(tmp_path / "models", version=VERSION)
+    _second_artifact(tmp_path)
+    holder = ModelHolder(holder_path)
+    with TestClient(create_app(holder=holder)) as test_client:
+        before = test_client.get("/health").json()
+        assert before["model_version"] == VERSION
+
+        response = test_client.post("/reload", json={"model_version": VERSION_B})
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "model_version": VERSION_B,
+            "model_loaded": True,
+        }
+        after = test_client.get("/health").json()
+        assert after["model_version"] == VERSION_B
+        # ``/model-info`` must agree with the new holder state.
+        info = test_client.get("/model-info").json()
+        assert info["model_version"] == VERSION_B
+
+
+def test_reload_returns_404_for_unknown_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unknown / malformed versions become ``404 model_not_found``."""
+
+    monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", tmp_path)
+    holder_path = _artifact(tmp_path / "models", version=VERSION)
+    holder = ModelHolder(holder_path)
+    with TestClient(create_app(holder=holder)) as test_client:
+        response = test_client.post("/reload", json={"model_version": "not-a-real-version"})
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error_code"] == "model_not_found"
+    assert "not found" in body["message"].lower()
+    assert body["request_id"]
+
+
+def test_reload_rejects_when_request_body_is_empty(
+    client: TestClient,
+) -> None:
+    """An empty body must trigger ``validation_failed`` (Pydantic)."""
+
+    response = client.post("/reload", json={})
+    assert response.status_code == 422
+    assert response.json()["error_code"] == "validation_failed"
+
+
+def test_holder_reload_to_unknown_version_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``ModelHolder.reload_to`` must refuse to mutate the holder on failure."""
+
+    monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", tmp_path)
+    holder_path = _artifact(tmp_path / "models", version=VERSION)
+    holder = ModelHolder(holder_path)
+    holder.load()
+    original_version = holder.model_version
+    with pytest.raises(FileNotFoundError):
+        holder.reload_to("99999999T999999Z-deadbeef0000")
+    # The holder keeps serving the previous model — never a half-loaded state.
+    assert holder.model_version == original_version
+    assert holder.pipeline is not None
