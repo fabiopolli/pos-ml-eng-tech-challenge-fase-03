@@ -1,4 +1,4 @@
-"""Language detection for the smoke API.
+"""Language detection for the dev API.
 
 We rely on ``langid`` (lid.py) — a small, deterministic language
 identifier that ships with a prebuilt model and has no network

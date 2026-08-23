@@ -33,7 +33,7 @@ def test_required_directories_exist() -> None:
         "notebooks",
         "reports/figures",
         "scripts",
-        "src/triage_ml/api",
+        "src/triage_ml/dev_api",
         "src/triage_ml/data",
         "src/triage_ml/models",
         "src/triage_ml/monitoring",

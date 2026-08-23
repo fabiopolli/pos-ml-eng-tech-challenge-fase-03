@@ -5,17 +5,17 @@
 | Integrante | Will (Bill) |
 | Etapa do checklist | Etapa 2 (baseline) — `docs/CHECKLIST.md` reordenado em 2026-08-23 |
 | Período desta entrega | 2026-08-23 (uma única sessão de trabalho) |
-| Última revisão | commit `d1cbe3f` em `origin/main` + checagem de idioma na `/predict` + dashboard de smoke |
+| Última revisão | commit `d1cbe3f` em `origin/main` + checagem de idioma na `/predict` + dashboard de desenvolvimento |
 | Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Fase 2 |
 
-Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma API de smoke que outros integrantes (Romário, Denis, Fábio) possam consumir sem stubs. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
+Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma **API de desenvolvimento** (`src/triage_ml/dev_api/`) que outros integrantes (Romário, Denis, Fábio) possam consumir para validar localmente. A API de desenvolvimento **consome o modelo real treinado** — não é um stub. A API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará este contrato. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
 
 ## 1. Resumo executivo
 
 - Modelo baseline: TF-IDF + **LinearSVC**, escolhido por macro-F1 em validação cruzada estratificada de 5 folds somente no treino (LinearSVC `0.7335` vs LogisticRegression `0.7319`). O `test set` permaneceu vedado até a avaliação final.
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
-- API de smoke FastAPI expõe `GET /health` e `POST /predict` com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana).
+- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana).
 - Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **50 testes verdes** em `uv run pytest`.
 - Lint e formatação verdes (`ruff check .` / `ruff format .`).
 
@@ -27,7 +27,7 @@ A Fase 1 correspondeu às tarefas `F1.T1` a `F1.T6` de [`docs/plans/PLAN-text-cl
 - [x] Seeds, preprocessing, fingerprints e versões fixas.
 - [x] Métricas por classe e agregadas, com figuras em `reports/figures/`.
 - [x] Modelo e metadados serializados segundo contrato e validados por checksum.
-- [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] API de desenvolvimento (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers.
 
 A Fase 2 (otimização ONNX, instrumentação Prometheus, Compose com API+Prometheus+Grafana, dashboard e teste de privacidade) **não está no escopo desta entrega** e foi explicitamente diferida.
 
@@ -183,11 +183,11 @@ Falhas levantam `ArtifactIntegrityError` ou `ArtifactCompatibilityError`. A API 
 
 O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de inferência (centenas de árvores percorridas por documento) sem ganho consistente de F1 sobre modelos lineares em texto curto. A justificativa foi registrada em `README.md` seção "Modelo (Bill)" para a banca.
 
-## 5. API de smoke
+## 5. API de desenvolvimento
 
 ### 5.1 Comportamento
 
-`src/triage_ml/api/app.py` expõe `GET /health` e `POST /predict`. Características:
+`src/triage_ml/dev_api/app.py` expõe `GET /health` e `POST /predict`. A API consome o artefato real treinado em `models/<versão>/model.joblib` (validado por checksum e manifesto). Não é um stub. Características:
 
 - **`/health`**: retorna `HealthOut(status, model_version, model_loaded)`. Se o artefato não carregar, a aplicação **não sobe** (`RuntimeError` no `lifespan`).
 - **`/predict`** (`POST {"text": "..."}`):
@@ -200,7 +200,7 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
 
 ### 5.1 Checagem de idioma (`langid` local)
 
-A `/predict` rejeita preventivamente qualquer texto que não esteja no allow-list `{"en"}` antes de invocar o pipeline. A política vive em `configs/api.yaml` e é carregada por `triage_ml.api.config.get_api_config()` (LRU cache).
+A `/predict` rejeita preventivamente qualquer texto que não esteja no allow-list `{"en"}` antes de invocar o pipeline. A política vive em `configs/api.yaml` e é carregada por `triage_ml.dev_api.config.get_api_config()` (LRU cache).
 
 ```yaml
 api:
@@ -210,7 +210,7 @@ api:
   min_language_score: 0.0
 ```
 
-`detect_language` em `triage_ml/api/language.py` aplica a política em três camadas:
+`detect_language` em `triage_ml/dev_api/language.py` aplica a política em três camadas:
 
 1. **Comprimento mínimo** (`min_text_chars_for_language_check = 20`). Textos mais curtos são rejeitados com `error_code=text_too_short_for_language_check` (status 422) sem chamar o detector — `langid` é instável abaixo desse limite.
 2. **Confiança mínima** (`min_language_score = 0.0` por default, opt-in para endurecer). `langid.classify` retorna `(iso_code, log_prob)` com `log_prob ≤ 0`; o normalizador `_normalise_score` aplica `math.exp` com saturação em `[-500, 0]`. Detecções abaixo do limiar viram `error_code=indeterminate_language`.
@@ -218,9 +218,9 @@ api:
 
 `ErrorOut` ganhou dois campos opcionais — `detected_language` e `detected_language_score` — para que o cliente saiba por que o pedido foi rejeitado sem expor o `text`. O corpo nunca carrega o `text` original; o `Server-Timing` agora reporta `detect;dur=<ms>, predict;dur=<ms>` quando ambos os estágios rodam, ou apenas `detect;dur=<ms>` quando o detector interrompe o fluxo.
 
-### 5.2 Evidência do smoke
+### 5.2 Evidência da validação
 
-Execução de `python scripts/smoke_api.py` produziu o relatório sanitizado `reports/evidence/api-smoke.json` com cinco predições, três cenários de política de idioma e um teste de validação 422. Saída resumida do último run:
+Execução de `python scripts/validate_api.py` produziu o relatório sanitizado `reports/evidence/api-dev.json` com cinco predições, três cenários de política de idioma e um teste de validação 422. Saída resumida do último run:
 
 | Caso | HTTP | `label` / `error_code` | `latency_ms` | Notas |
 |---|---|---|---|---|
@@ -241,9 +241,9 @@ Cobertura por arquivo:
 | `tests/test_model_pipeline.py` | 9 | `build_pipeline` (TF-IDF defaults, LR com `predict_proba`, LinearSVC com `class_weight=balanced`), end-to-end em corpus sintético |
 | `tests/test_model_artifact.py` | 12 | `ArtifactPaths`, `file_sha256`, `write_classes` (com `_coerce` de `numpy.int64`), `read_classes`, `validate_metadata` (campos obrigatórios), `verify_artifact_integrity` (caso feliz, model swap, checksum ausente), `load_artifact` |
 | `tests/test_model_training.py` | 1 | Integração `run_training + load_artifact` em dataset sintético, garantindo `selection.candidates = {logreg, linear_svc}`, `test_set_used_for_selection=False`, balanced_accuracy presente, `pipeline.classes_ == metadata.classes` |
-| `tests/test_api_smoke.py` | 12 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado |
-| `tests/test_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
-| `tests/test_dashboard_helpers.py` | 6 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`) — mocka `requests.request`, não precisa de API rodando |
+| `tests/test_dev_api.py` | 12 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado |
+| `tests/test_dev_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
+| `tests/test_dev_dashboard_helpers.py` | 6 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`) — mocka `requests.request`, não precisa de API rodando |
 
 Comando único:
 
@@ -253,9 +253,9 @@ uv run ruff check .
 uv run ruff format .
 ```
 
-### 6.1 Dashboard de smoke (`front/app_smoke.py`)
+### 6.1 Dashboard de desenvolvimento (`front/app_dev.py`)
 
-Ferramenta opcional para o desenvolvedor exercitar `/health` e `/predict` manualmente sem `curl`. Stacklit em modo HTTP contra qualquer URL da API (default `http://127.0.0.1:8000`, configurável na sidebar). Três abas:
+Ferramenta opcional para o desenvolvedor exercitar `/health` e `/predict` manualmente sem `curl`. Streamlit em modo HTTP contra qualquer URL da API (default `http://127.0.0.1:8000`, configurável na sidebar). Três abas:
 
 - **Health** — chama `GET /health` e mostra `status`, `model_version`, `model_loaded`.
 - **Predição** — área de texto + `POST /predict` exibindo `label`, `label_name`, `score`, `latency_ms`, `request_id` e os headers `X-Request-ID` / `Server-Timing`.
@@ -276,7 +276,7 @@ UNSUP 422 unsupported_language det= pt score= 1.5e-177
 |---|---|---|
 | Otimização de latência (ONNX/quantização/pruning) | Pendente | Fase 2 — `F2.T1` a `F2.T6`. Critério: Δ macro-F1 ≤ 1 pp no split de teste E ≥ 20% de redução no p95 de inferência. |
 | Instrumentação Prometheus + Compose + Grafana | Pendente | Fase 2 — `F2.T7` a `F2.T9`. `latency_ms` e `Server-Timing` já estão prontos para virar `Histogram`. |
-| API oficial com Docker e auth | Pendente | Romário, Etapa 3 — herda o contrato desta smoke |
+| API oficial com Docker e auth | Pendente | Romário, Etapa 3 — herda o contrato desta API de desenvolvimento |
 | DAG Airflow de retreino | Pendente | Denis, Etapa 7 — consome `triage_ml.models.train.run_training` |
 | Classe 3 (nervous system) com F1 baixo | Aceito, documentado | Investigar balanceamento de classes e features mais ricas (n-gramas maiores, char n-gramas) em baseline da Fase 2 antes da otimização |
 
@@ -290,7 +290,7 @@ uv sync
 PYTHONPATH=src uv run python -m triage_ml.models.train
 
 # 3. Validar saúde da API (descobre o artefato mais recente)
-PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # 4. Sanidade rápida
 curl -s http://127.0.0.1:8000/health | jq
@@ -322,10 +322,10 @@ models/
 reports/
 ├── figures/08_confusion_matrix_linear_svc.png
 ├── figures/08_top_features_linear_svc.png
-└── evidence/api-smoke.json
+└── evidence/api-dev.json
 
 src/triage_ml/
-├── api/{app.py, schemas.py, language.py, config.py}  (FastAPI smoke + checagem de idioma)
+├── dev_api/{app.py, schemas.py, language.py, config.py}  (FastAPI de desenvolvimento + checagem de idioma)
 ├── models/{artifact.py, pipeline.py, train.py}      (treino + contrato do artefato)
 ├── data/{prepare.py}                                (dedup, sem leakage)
 └── monitoring/                                       (reservado para Fase 2)
@@ -334,18 +334,18 @@ tests/
 ├── test_model_pipeline.py
 ├── test_model_artifact.py
 ├── test_model_training.py
-├── test_api_smoke.py
-├── test_api_language.py
-└── test_dashboard_helpers.py
+├── test_dev_api.py
+├── test_dev_api_language.py
+└── test_dev_dashboard_helpers.py
 
 configs/
 ├── training.yaml                                    (hiperparâmetros + label_mapping)
 └── api.yaml                                          (allow-list de idiomas + thresholds)
 front/
-├── app_smoke.py                                      (dashboard Streamlit de smoke manual)
+├── app_dev.py                                       (dashboard Streamlit de validação manual)
 └── README.md                                         (instruções e escopo)
 ```
 
 ## 10. Conclusão
 
-A Fase 1 entrega o baseline do classificador e endurece o contrato do artefato a ponto de ser seguro oferecer para a Etapa 3 (API oficial) e a Etapa 7 (Airflow) sem rework. O pipeline TF-IDF + LinearSVC atinge `macro-F1 = 0.7296` no split de teste, com seleção honesta por CV 5-fold no treino. A API de smoke já entrega `latency_ms`, request_id interno e `Server-Timing`, removendo o atrito de integrar a Etapa 6 (Prometheus/Grafana) na Fase 2. O restante do trabalho (otimização, instrumentação, dashboard, privacidade operacional) está descrito em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e aguarda a próxima janela de trabalho.
+A Fase 1 entrega o baseline do classificador e endurece o contrato do artefato a ponto de ser seguro oferecer para a Etapa 3 (API oficial) e a Etapa 7 (Airflow) sem rework. O pipeline TF-IDF + LinearSVC atinge `macro-F1 = 0.7296` no split de teste, com seleção honesta por CV 5-fold no treino. A API de desenvolvimento (`src/triage_ml/dev_api/`) já entrega `latency_ms`, request_id interno e `Server-Timing` consumindo o modelo real, removendo o atrito de integrar a Etapa 6 (Prometheus/Grafana) na Fase 2. O restante do trabalho (otimização, instrumentação, dashboard, privacidade operacional) está descrito em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e aguarda a próxima janela de trabalho.

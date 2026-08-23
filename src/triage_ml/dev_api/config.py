@@ -1,7 +1,7 @@
 """API configuration loaded from ``configs/api.yaml``.
 
 The configuration is read once at module import. Tests can override
-the resulting values via :func:`apply_overrides` to keep the smoke
+the resulting values via :func:`apply_overrides` to keep the dev test
 suite hermetic.
 """
 
@@ -20,7 +20,7 @@ DEFAULT_CONFIG_PATH = REPO_ROOT / "configs" / "api.yaml"
 
 @dataclass(frozen=True)
 class ApiConfig:
-    """Settings consumed by the smoke API."""
+    """Settings consumed by the dev API."""
 
     supported_languages: set[str] = field(default_factory=lambda: {"en"})
     min_text_chars_for_language_check: int = 20

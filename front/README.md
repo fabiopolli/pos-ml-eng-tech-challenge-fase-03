@@ -1,9 +1,10 @@
-# Front — Smoke dashboard
+# Front — Dashboard de desenvolvimento
 
 Ferramentas de interface voltadas para o desenvolvedor. Não fazem parte
-do runtime da API; existem apenas para acelerar smoke tests manuais.
+do runtime da API; existem apenas para acelerar validações manuais da
+API de desenvolvimento (`src/triage_ml/dev_api/`).
 
-## `app_smoke.py`
+## `app_dev.py`
 
 Dashboard Streamlit que fala HTTP com qualquer instância da API
 (local, container ou cloud) e expõe três áreas:
@@ -24,10 +25,10 @@ um sinal de bug.
 
 ```bash
 # 1. Suba a API em outro terminal
-PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # 2. Suba o dashboard
-uv run streamlit run front/app_smoke.py
+uv run streamlit run front/app_dev.py
 ```
 
 Acesse `http://localhost:8501`.

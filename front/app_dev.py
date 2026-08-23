@@ -1,4 +1,4 @@
-"""Streamlit smoke dashboard for the triage_ml FastAPI service.
+"""Streamlit dev dashboard for the triage_ml FastAPI service.
 
 The dashboard is a developer-facing tool for exercising the ``/health``
 and ``/predict`` endpoints against any reachable instance of the API
@@ -54,7 +54,7 @@ LANGUAGE_PRESETS: dict[str, dict[str, str]] = {
             "notes that the detector could not classify reliably."
         ),
         "note": (
-            "Texto real em inglês; no smoke script a fixture mocka "
+            "Texto real em inglês; no script de validação a fixture mocka "
             "``langid`` com log-prob saturado em ``-1000`` (score 0.0)."
         ),
     },
@@ -233,7 +233,7 @@ def main() -> None:
 
     st.title(f"{PAGE_ICON} {PAGE_TITLE}")
     st.markdown(
-        "Dashboard de smoke para a API FastAPI do classificador de triagem. "
+        "Dashboard de desenvolvimento para a API FastAPI do classificador de triagem. "
         "Use para validar manualmente `/health` e `/predict` em qualquer "
         "ambiente — local, container ou cloud. Métricas de produção "
         "continuam a viver no stack **Prometheus + Grafana**."
@@ -247,7 +247,8 @@ def main() -> None:
             help="Ex.: http://127.0.0.1:8000 (local), http://api.cloud.run.app",
         )
         st.caption(
-            "Suba a API local com `PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --reload`."
+            "Suba a API local com "
+            "`PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --reload`."
         )
 
         if st.button("🔄 Atualizar health", use_container_width=True):

@@ -1,7 +1,7 @@
-"""Manually exercise the smoke API and persist sanitized evidence.
+"""Manually exercise the local dev API and persist sanitized evidence.
 
 This script is invoked by the developer to validate the API locally
-(``uv run python scripts/smoke_api.py``). It is not part of the
+(``uv run python scripts/validate_api.py``). It is not part of the
 runtime: it exists to satisfy the F1.T5 evidence requirement in
 ``docs/plans/PLAN-text-classifier.md``.
 
@@ -18,12 +18,12 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from triage_ml.api import app as app_module
-from triage_ml.api import config as api_config
-from triage_ml.api import language as api_language
+from triage_ml.dev_api import app as app_module
+from triage_ml.dev_api import config as api_config
+from triage_ml.dev_api import language as api_language
 
 EVIDENCE_DIR = Path(__file__).resolve().parents[1] / "reports" / "evidence"
-EVIDENCE_FILE = EVIDENCE_DIR / "api-smoke.json"
+EVIDENCE_FILE = EVIDENCE_DIR / "api-dev.json"
 
 # Tiny fixtures only. No clinical abstracts are referenced or persisted.
 FIXTURES = [
@@ -124,7 +124,7 @@ def main() -> int:
         health_resp.raise_for_status()
         health_body = health_resp.json()
         if not health_body.get("model_loaded"):
-            raise RuntimeError("smoke API did not load the model")
+            raise RuntimeError("dev API did not load the model")
 
         predict_records: list[dict[str, object]] = []
         for text in FIXTURES:
@@ -162,7 +162,7 @@ def main() -> int:
         language_records = _run_language_checks(strict_client)
 
     evidence = {
-        "endpoint": "/predict (smoke API)",
+        "endpoint": "/predict (dev API)",
         "health": health_body,
         "predictions": predict_records,
         "language_checks": language_records,

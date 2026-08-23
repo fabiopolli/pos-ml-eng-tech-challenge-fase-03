@@ -9,7 +9,7 @@
 
 | Fase | Etapas do checklist | Peso oficial | Conteúdo |
 |---|---|---|---|
-| **Fase 1 — Modelo baseline + API de smoke** | Etapa 2 | Parte do item modelo + otimização (20%) | Treino, métricas, serialização, API de smoke local |
+| **Fase 1 — Modelo baseline + API de desenvolvimento** | Etapa 2 | Parte do item modelo + otimização (20%) | Treino, métricas, serialização, API de desenvolvimento local |
 | **Fase 2 — Otimização + observabilidade** | Etapas 5 + 6 | Etapa 5 completa modelo + otimização (20%); Etapa 6 cobre observabilidade (20%) | ONNX, benchmark, Prometheus/Grafana/Compose, dashboard comparativo |
 
 A API oficial FastAPI (Etapa 3) é trabalho do Romário e não está no escopo deste plano; ela consome o artefato e o contrato de `metadata.json` definidos na Fase 1.
@@ -34,7 +34,7 @@ A versão anterior deste arquivo cobria apenas a Fase 1 e tratava otimização/o
 
 ---
 
-# Fase 1 — Modelo baseline + API de smoke (Etapa 2 do checklist)
+# Fase 1 — Modelo baseline + API de desenvolvimento (Etapa 2 do checklist)
 
 ## F1. Contexto e objetivo
 
@@ -43,9 +43,9 @@ Entregar:
 1. Classificador NLP leve (TF-IDF + classificador linear Scikit-Learn) treinado no recorte preparado pela fundação (5.000 amostras, seed 42).
 2. Artefato serializado segundo o contrato (`models/<versão>/model.joblib` + `metadata.json`), com classes e nomes no próprio manifesto.
 3. Métricas por classe e agregadas, com figuras em `reports/figures/`.
-4. API FastAPI de smoke local (`/health` + `/predict`) consumindo o artefato, com `latency_ms` e `request_id` já expostos para reuso na Fase 2.
+4. API FastAPI de desenvolvimento (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com `latency_ms` e `request_id` já expostos para reuso na Fase 2.
 
-A API oficial é do Romário (Etapa 3). Esta API de smoke é substituída ou estendida por ele; o contrato (esquemas Pydantic, headers) é ponto de alinhamento obrigatório antes de qualquer promoção.
+A API oficial é do Romário (Etapa 3). Esta API de desenvolvimento é substituída ou estendida por ele; o contrato (esquemas Pydantic, headers) é ponto de alinhamento obrigatório antes de qualquer promoção.
 
 ## F1. Decisões de stack e justificativas
 
@@ -56,7 +56,7 @@ A API oficial é do Romário (Etapa 3). Esta API de smoke é substituída ou est
 | Modelo selecionado | `LinearSVC` | Maior macro-F1 médio na validação (`0.7335` contra `0.7319`); o teste permaneceu isolado até a escolha |
 | Por que não Random Forest? | — | Exemplo do enunciado. Em TF-IDF, RF explode o custo de inferência (centenas de árvores) sem ganho consistente sobre modelos lineares em texto. Justificativa registrada no README seção Bill |
 | Serialização | `joblib` para o pipeline scikit-learn | Padrão sklearn |
-| API (smoke) | FastAPI + Uvicorn, em processo local sem Docker | Suficiente para teste manual; Docker e Compose ficam para Etapa 4 (Fábio) e Fase 2 |
+| API (desenvolvimento) | FastAPI + Uvicorn, em processo local sem Docker | Suficiente para validação local; Docker e Compose ficam para Etapa 4 (Fábio) e Fase 2 |
 | Seeds | 42 em todos os pontos estocásticos | Reprodutibilidade exigida pelo checklist |
 
 Referência do paper (Schopf et al., NLPIR 2022) no Medical Corpus, F1 micro (unsupervised): LSA 31,6; SBERT MiniLM 46,5; DeBERTa zero-shot 57,3. Esses números ficam apenas como contexto narrativo, pois usam metodologia diferente e não são meta nem evidência antecipada de superioridade do baseline supervisionado.
@@ -71,7 +71,7 @@ src/triage_ml/
 │   ├── pipeline.py            # fábrica do Pipeline TF-IDF + classificador
 │   ├── train.py               # treino + métricas + serialização
 │   └── artifact.py            # lê/valida/grava model.joblib e metadata.json
-└── api/
+└── dev_api/
     ├── __init__.py
     ├── app.py                 # FastAPI mínimo com /health e /predict
     ├── schemas.py             # Pydantic de entrada/saída
@@ -80,14 +80,14 @@ src/triage_ml/
 tests/
 ├── test_model_pipeline.py
 ├── test_model_artifact.py
-├── test_api_smoke.py
-├── test_api_language.py
-└── test_dashboard_helpers.py  # helpers HTTP do dashboard (mocks requests)
+├── test_dev_api.py
+├── test_dev_api_language.py
+└── test_dev_dashboard_helpers.py  # helpers HTTP do dashboard (mocks requests)
 models/
 └── README.md                  (existente; artefatos permanecem fora do Git)
 reports/
 ├── evidence/
-│   └── api-smoke.json         # resposta sanitizada, sem os textos enviados
+│   └── api-dev.json           # resposta sanitizada, sem os textos enviados
 └── figures/
     ├── 08_confusion_matrix_linear_svc.png
     └── 08_top_features_linear_svc.png
@@ -95,7 +95,7 @@ configs/
 ├── training.yaml              # hiperparâmetros e label mapping versionados
 └── api.yaml                   # allow-list de idiomas + thresholds da política de idioma
 front/
-├── app_smoke.py               # dashboard Streamlit para exercitar /health e /predict
+├── app_dev.py                 # dashboard Streamlit para exercitar /health e /predict
 └── README.md                  # instruções de uso e escopo do dashboard
 ```
 
@@ -154,13 +154,13 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 - `tests/test_model_pipeline.py`: usa fixture sintética pequena e cobre fit multiclasses, shapes, configuração reproduzível e presença de `predict_proba` no LR.
 - `tests/test_model_artifact.py`: round-trip `model.joblib` + `metadata.json`; valida schema, checksum, fingerprints, label mapping e `metadata.classes == model.classes_`.
 
-### F1.T4. API de smoke
-- `src/triage_ml/api/schemas.py`:
+### F1.T4. API de desenvolvimento
+- `src/triage_ml/dev_api/schemas.py`:
   - `PredictIn(text: constr(strip_whitespace=True, min_length=1, max_length=20000))`.
   - `PredictOut(label, label_name, score: float | None, model_version, latency_ms, request_id, warnings)`.
   - `HealthOut(status, model_version, model_loaded)`.
   - `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)`.
-- `src/triage_ml/api/app.py`:
+- `src/triage_ml/dev_api/app.py`:
   - `GET /health` → `HealthOut`.
   - `POST /predict` → `PredictIn` → `PredictOut` (com checagem de idioma antes do pipeline).
   - Camada de idioma: `detect_language(text, ...)` aplicado após validação de schema. Falhas viram `UnsupportedLanguageError`, mapeadas para `error_code` apropriado.
@@ -171,14 +171,14 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
   - Gera `request_id` (`uuid.uuid4().hex[:12]`) em `request.state.request_id`.
   - Mede `latency_ms` com `time.perf_counter()` em torno do `pipeline.predict`/`predict_proba`. Mede `detect_latency_ms` ao redor de `detect_language`.
   - Ecoa `request_id` em `X-Request-ID`.
-  - Emite `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` se a checagem interrompeu o fluxo).
+  - Emite `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` se a checagem de idioma interrompeu o fluxo).
   - Captura exceções inesperadas, preserva erros HTTP conhecidos e retorna `ErrorOut` com `error_code` genérico; loga apenas `request_id`, rota, status e latência (nunca `text` nem corpo da requisição).
-- `uvicorn triage_ml.api.app:app --reload` deve subir e responder nos dois endpoints.
-- `tests/test_api_smoke.py` cobre `/health`, `/predict`, artefato inválido, texto vazio, sanitização de erro, `X-Request-ID`, `Server-Timing` e ausência do texto em logs/respostas de erro.
-- `tests/test_api_language.py` cobre cada branch da política (`text_too_short_for_language_check`, `indeterminate_language`, `unsupported_language`), valida os campos `detected_language`/`detected_language_score` e confirma que o `text` nunca vaza.
+- `uvicorn triage_ml.dev_api.app:app --reload` deve subir e responder nos dois endpoints.
+- `tests/test_dev_api.py` cobre `/health`, `/predict`, artefato inválido, texto vazio, sanitização de erro, `X-Request-ID`, `Server-Timing` e ausência do texto em logs/respostas de erro.
+- `tests/test_dev_api_language.py` cobre cada branch da política (`text_too_short_for_language_check`, `indeterminate_language`, `unsupported_language`), valida os campos `detected_language`/`detected_language_score` e confirma que o `text` nunca vaza.
 
 ### F1.T5. Teste manual e evidências
-- Subir a API local, enviar 5 abstracts (incluindo 1 da classe 1 e 1 da classe 5) via `curl`/`httpie` e salvar somente respostas sanitizadas em `reports/evidence/api-smoke.json`; os textos de entrada não são persistidos.
+- Subir a API local, enviar 5 abstracts (incluindo 1 da classe 1 e 1 da classe 5) via `curl`/`httpie` e salvar somente respostas sanitizadas em `reports/evidence/api-dev.json`; os textos de entrada não são persistidos.
 - Para cada resposta, registrar `request_id`, `label`, `score`, `latency_ms`, headers `X-Request-ID` e `Server-Timing`. Confirmar que `latency_ms` varia entre chamadas.
 - **Cenários da política de idioma**: texto curto (`<20` chars, `error_code=text_too_short_for_language_check`), confiança baixa (mock de `langid.classify` com log-prob saturado, `error_code=indeterminate_language`), idioma fora do allow-list (mock `("pt", -0.1)`, `error_code=unsupported_language`). Cada cenário roda em um `TestClient` isolado com `_strict_lang_config` para forçar o limiar quando necessário.
 - Validar `metadata.json` (chaves, classes, versões).
@@ -190,7 +190,7 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 - Adicionar seção "Modelo (Bill)" no `README.md` resumindo tarefa real (categorias clínicas), abordagem, classes e como rodar treino + API local; incluir a justificativa formal de não-uso de Random Forest.
 - Atualizar `.agents/contracts/README.md` se o formato de `metadata.json` divergir.
 - Documentar a checagem de idioma (`langid`): nova subseção no README + entrada no `IMPLEMENTATION-REPORT-FASE-1.md` + linha de evolução no CHECKLIST; atualizar o plano (este arquivo) com a camada de contrato e os arquivos novos.
-- Documentar o dashboard de smoke (`front/app_smoke.py`): subseção no README, README próprio em `front/README.md`, evolução no CHECKLIST; deixar claro que **não substitui Prometheus/Grafana**.
+- Documentar o dashboard de desenvolvimento (`front/app_dev.py`): subseção no README, README próprio em `front/README.md`, evolução no CHECKLIST; deixar claro que **não substitui Prometheus/Grafana**.
 
 ## F1. Critérios de aceite
 
@@ -200,14 +200,14 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 - [x] Seeds, preprocessing, fingerprints e versões fixas.
 - [x] Métricas por classe e agregadas, com figuras em `reports/figures/`.
 - [x] Modelo e metadados serializados segundo contrato e validados por checksum.
-- [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] API de desenvolvimento local (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers.
 
 ## F1. Riscos específicos
 
 | Risco | Mitigação |
 |---|---|
 | Contrato fala em urgência, mas o dataset possui categorias clínicas | Gate humano antes de estabilizar labels, metadata e API; documentar a decisão no README/ADR aplicável |
-| Divergência entre esta API e a API oficial de Romário (Etapa 3) | Marcar como "smoke/provisória" no README; alinhar contrato Pydantic com Romário **antes** de qualquer promoção |
+| Divergência entre esta API e a API oficial de Romário (Etapa 3) | Marcar como "dev/provisória" no README (`src/triage_ml/dev_api/`); alinhar contrato Pydantic com Romário **antes** de qualquer promoção |
 | Seleção otimista pelo test set | Comparar modelos somente por validação estratificada no treino e fixar a escolha antes da avaliação final |
 | Modelo não serializa classes corretamente | `tests/test_model_artifact.py` valida `metadata.classes == model.classes_`, schema e checksum |
 | Conteúdo clínico em logs ou no `422` | Handler de validação sanitizado, testes automatizados e revisão das evidências antes de versionar |
@@ -221,15 +221,15 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 1. `chore: scaffold triage_ml.models package and training config`
 2. `feat(models): tf-idf + logistic regression pipeline with reproducible training`
 3. `test(models): cover pipeline fit/predict and artifact round-trip`
-4. `feat(api): minimal fastapi smoke app exposing /health and /predict`
+4. `feat(api): minimal fastapi dev app exposing /health and /predict`
 5. `docs(models): update checklist and readme for the baseline classifier`
-6. `feat(api): checagem de idioma na /predict via langid local` (entregue em 2026-08-23; adiciona `language.py`, `config.py`, `configs/api.yaml`, testes e evidência do smoke)
+6. `feat(api): checagem de idioma na /predict via langid local` (entregue em 2026-08-23; adiciona `language.py`, `config.py`, `configs/api.yaml`, testes e evidência do dev API)
 
 ## F1. Definição de pronto da Fase 1
 
 - Itens da Etapa 2 marcados com evidência no checklist.
 - `uv run pytest` e `uv run ruff check .` verdes.
-- API sobe com `uvicorn triage_ml.api.app:app` e responde `/health` e `/predict` com o artefato.
+- API sobe com `uvicorn triage_ml.dev_api.app:app` e responde `/health` e `/predict` com o artefato.
 - Treino reproduzível a partir de clone limpo, dado o CSV local versionado e o `data/medical_tc_labels.csv` (mapeamento `condition_label → condition_name`).
 - `README.md` e `CHECKLIST.md` refletem o estado real.
 
@@ -428,7 +428,7 @@ Mapeados nas Etapas 5 e 6 do `docs/CHECKLIST.md`:
 
 # Próximas fases (fora do escopo deste plano)
 
-- **API oficial** (Etapa 3, Romário): substitui ou incorpora a API de smoke.
+- **API oficial** (Etapa 3, Romário): substitui ou incorpora a API de desenvolvimento.
 - **CI/CD e Docker da imagem da API** (Etapa 4, Fábio): cria o Dockerfile e o build no CI; este plano depende disso, mas não é dono.
 - **DAG Airflow** (Etapa 7, Denis): consome `triage_ml.models.train.run_training` definido na Fase 1.
 - **Cloud, ADR, vídeo STAR, documentação final** (Etapa 8, Romário + Fábio).

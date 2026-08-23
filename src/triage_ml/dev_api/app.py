@@ -1,4 +1,16 @@
-"""Local smoke API for a validated baseline model artifact."""
+"""Local dev API for a validated baseline model artifact.
+
+The ``dev_api`` package is the developer-facing FastAPI app: it consumes
+the real trained artifact from ``models/`` (TF-IDF + LinearSVC) and is
+used by Bill (and any contributor) to validate the pipeline,
+serialization, language policy and observability primitives locally
+before the official API from Romário (Etapa 3 of the checklist) ships.
+
+It is **not** a stub, **not** a fake, and **not** production-ready: it
+has no auth, no rate limit, no Prometheus instrumentation and no
+Docker packaging. Treat it as a thin, well-tested seam around the
+artifact contract.
+"""
 
 from __future__ import annotations
 
@@ -15,12 +27,12 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from triage_ml.api.config import get_api_config
-from triage_ml.api.language import UnsupportedLanguageError, detect_language
-from triage_ml.api.schemas import ErrorOut, HealthOut, PredictIn, PredictOut
+from triage_ml.dev_api.config import get_api_config
+from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
+from triage_ml.dev_api.schemas import ErrorOut, HealthOut, PredictIn, PredictOut
 from triage_ml.models.artifact import load_artifact
 
-logger = logging.getLogger("triage_ml.api")
+logger = logging.getLogger("triage_ml.dev_api")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VERSION_DIR_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}$")
 
@@ -96,7 +108,7 @@ def create_app(
         holder.load()
         yield
 
-    app = FastAPI(title="triage_ml smoke API", lifespan=lifespan)
+    app = FastAPI(title="triage_ml dev API", lifespan=lifespan)
     app.state.holder = holder
 
     @app.middleware("http")

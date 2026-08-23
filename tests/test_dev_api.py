@@ -1,4 +1,4 @@
-"""Hermetic contract tests for the local smoke API."""
+"""Hermetic contract tests for the local dev API."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import joblib
 import pytest
 from fastapi.testclient import TestClient
 
-from triage_ml.api.app import ModelHolder, create_app
+from triage_ml.dev_api.app import ModelHolder, create_app
 from triage_ml.models.artifact import ArtifactPaths, build_metadata, write_classes, write_metadata
 from triage_ml.models.pipeline import build_pipeline
 
@@ -210,7 +210,7 @@ def test_prediction_failure_is_sanitized_and_does_not_log_text(
             raise RuntimeError(f"failed for {sentinel}")
 
     holder.pipeline = FailingPipeline()
-    with caplog.at_level("ERROR", logger="triage_ml.api"):
+    with caplog.at_level("ERROR", logger="triage_ml.dev_api"):
         response = client.post(
             "/predict",
             json={

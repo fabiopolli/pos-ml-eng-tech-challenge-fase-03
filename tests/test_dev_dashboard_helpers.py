@@ -1,11 +1,11 @@
-"""Hermetic tests for the smoke dashboard helpers.
+"""Hermetic tests for the dev dashboard helpers.
 
 The dashboard itself runs inside Streamlit, which is heavy to spin up in
 unit tests. We cover the deterministic helpers (``_check_health``,
 ``_post_predict``, ``_render_response`` and the preset table) by mocking
 ``requests.request`` so we don't need a live API.
 
-Streamlit is imported lazily inside the module (see ``front/app_smoke.py``
+Streamlit is imported lazily inside the module (see ``front/app_dev.py``
 import guard below) — when not available, only the pure helpers execute.
 """
 
@@ -19,15 +19,15 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DASHBOARD_PATH = REPO_ROOT / "front" / "app_smoke.py"
+DASHBOARD_PATH = REPO_ROOT / "front" / "app_dev.py"
 
 
 @pytest.fixture
 def dashboard_module():
     """Import the dashboard module bypassing the Streamlit runtime."""
 
-    spec = importlib.util.spec_from_file_location("app_smoke", DASHBOARD_PATH)
-    assert spec is not None and spec.loader is not None, "could not load app_smoke"
+    spec = importlib.util.spec_from_file_location("app_dev", DASHBOARD_PATH)
+    assert spec is not None and spec.loader is not None, "could not load app_dev"
     module = importlib.util.module_from_spec(spec)
     # Register before exec so dataclass decorators find the module name.
     sys.modules[spec.name] = module

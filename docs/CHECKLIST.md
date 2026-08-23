@@ -23,7 +23,7 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 >
 > Atualização 2026-08-23 (idioma da API): a `/predict` ganhou checagem de idioma com `langid` rodando localmente. Textos com menos de 20 caracteres são rejeitados como `text_too_short_for_language_check`; detecções com confiança baixa ou idioma fora do allow-list `{"en"}` são rejeitadas como `indeterminate_language` ou `unsupported_language`. A política vive em `configs/api.yaml`; o body de erro carrega `detected_language` e `detected_language_score`, mas nunca o `text`.
 >
-> Atualização 2026-08-23 (dashboard de smoke): `front/app_smoke.py` é um dashboard Streamlit opcional para exercitar `/health` e `/predict` manualmente. Fala HTTP contra qualquer URL configurada (local, container ou cloud). Tem 3 abas (Health, Predição, Política de idioma) com validação automática do `error_code` nos cenários canônicos. Não substitui Prometheus/Grafana para produção — é ferramenta de smoke do desenvolvedor.
+> Atualização 2026-08-23 (dashboard de desenvolvimento): `front/app_dev.py` é um dashboard Streamlit opcional para exercitar `/health` e `/predict` manualmente. Fala HTTP contra qualquer URL configurada (local, container ou cloud). Tem 3 abas (Health, Predição, Política de idioma) com validação automática do `error_code` nos cenários canônicos. Não substitui Prometheus/Grafana para produção — é ferramenta de validação do desenvolvedor.
 
 ## Requisitos transversais
 
@@ -78,11 +78,11 @@ Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerent
 - [x] Seeds, preprocessing, fingerprints e versões fixas (seed 42, versões em `metadata.json`, SHA-256 de input/dataset/splits/config/modelo).
 - [x] Métricas por classe e agregadas, com figuras em `reports/figures/08_confusion_matrix_linear_svc.png` e `08_top_features_linear_svc.png`.
 - [x] Modelo e manifesto canônico serializados em diretório imutável, com schema/classes/mapping/checksum validados antes da desserialização.
-- [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] API de desenvolvimento (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers.
 - [x] Checagem de idioma na `/predict` via `langid` (allow-list `{"en"}`, rejeitando texto curto, score baixo e idioma não suportado, com `detected_language`/`detected_language_score` no body de erro).
-- [x] Dashboard de smoke `front/app_smoke.py` (Streamlit) para exercitar `/health` e `/predict` manualmente, com cenários canônicos da política de idioma.
+- [x] Dashboard de desenvolvimento `front/app_dev.py` (Streamlit) para exercitar `/health` e `/predict` manualmente, com cenários canônicos da política de idioma.
 
-**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7460`, `balanced_accuracy=0.7221`, `macro_f1=0.7296`, `weighted_f1=0.7438`. Seleção: LinearSVC `0.7335` contra LR `0.7319` em macro-F1 CV. Resumo local em `models/20260823T134214Z-bed2194376bc/summary.json`; smoke versionável em `reports/evidence/api-smoke.json`.
+**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7460`, `balanced_accuracy=0.7221`, `macro_f1=0.7296`, `weighted_f1=0.7438`. Seleção: LinearSVC `0.7335` contra LR `0.7319` em macro-F1 CV. Resumo local em `models/20260823T134214Z-bed2194376bc/summary.json`; evidência versionável em `reports/evidence/api-dev.json`.
 
 Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, otimização bem-sucedida e melhoria demonstrada. A otimização em si entra na Etapa 5.
 
@@ -90,7 +90,7 @@ Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP fu
 
 ### API FastAPI — Romário
 
-- [ ] Validar contrato de `POST /predict` (já alinhado com a smoke de Bill).
+- [ ] Validar contrato de `POST /predict` (já alinhado com a API de desenvolvimento de Bill).
 - [ ] Implementar health check, predição, validação e erros com base no artefato real, sem stub.
 - [ ] Carregar artefato do modelo de forma configurável (env `MODEL_PATH`).
 - [ ] Manter `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` herdados da Etapa 2.

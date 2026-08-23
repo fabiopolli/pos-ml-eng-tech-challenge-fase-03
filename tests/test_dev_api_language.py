@@ -10,10 +10,10 @@ import joblib
 import pytest
 from fastapi.testclient import TestClient
 
-from triage_ml.api import language as api_language
-from triage_ml.api.app import ModelHolder, create_app
-from triage_ml.api.config import ApiConfig, reset_api_config_cache
-from triage_ml.api.language import UnsupportedLanguageError, detect_language
+from triage_ml.dev_api import language as api_language
+from triage_ml.dev_api.app import ModelHolder, create_app
+from triage_ml.dev_api.config import ApiConfig, reset_api_config_cache
+from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
 from triage_ml.models.artifact import ArtifactPaths, build_metadata, write_classes, write_metadata
 from triage_ml.models.pipeline import build_pipeline
 
@@ -140,7 +140,7 @@ def fixed_config(monkeypatch: pytest.MonkeyPatch) -> ApiConfig:
         min_text_chars_for_language_check=20,
         min_language_score=0.85,
     )
-    monkeypatch.setattr("triage_ml.api.app.get_api_config", lambda: config)
+    monkeypatch.setattr("triage_ml.dev_api.app.get_api_config", lambda: config)
     reset_api_config_cache()
     yield config
     reset_api_config_cache()
@@ -192,7 +192,7 @@ def test_api_predict_accepts_english_text(
         min_text_chars_for_language_check=20,
         min_language_score=0.0,
     )
-    monkeypatch.setattr("triage_ml.api.app.get_api_config", lambda: config)
+    monkeypatch.setattr("triage_ml.dev_api.app.get_api_config", lambda: config)
     reset_api_config_cache()
     try:
         response = client.post("/predict", json={"text": EN_TEXT})
@@ -218,14 +218,14 @@ def test_api_predict_rejects_non_english_text(
 ) -> None:
     """Non-English input is rejected without going through the model."""
 
-    from triage_ml.api.config import ApiConfig
+    from triage_ml.dev_api.config import ApiConfig
 
     config = ApiConfig(
         supported_languages={"en"},
         min_text_chars_for_language_check=20,
         min_language_score=0.0,
     )
-    monkeypatch.setattr("triage_ml.api.app.get_api_config", lambda: config)
+    monkeypatch.setattr("triage_ml.dev_api.app.get_api_config", lambda: config)
     reset_api_config_cache()
     try:
         with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):
@@ -279,7 +279,7 @@ def test_api_predict_language_error_does_not_leak_text_in_logs(
         "submetido a angiocoronariografia que confirmou oclusão arterial importante."
     )
     with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):
-        with caplog.at_level("INFO", logger="triage_ml.api"):
+        with caplog.at_level("INFO", logger="triage_ml.dev_api"):
             response = client.post("/predict", json={"text": payload})
     assert response.status_code == 422
     assert sentinel not in response.text
@@ -299,7 +299,7 @@ def test_api_predict_uses_configured_thresholds(
         min_text_chars_for_language_check=5,
         min_language_score=0.0,
     )
-    monkeypatch.setattr("triage_ml.api.app.get_api_config", lambda: permissive)
+    monkeypatch.setattr("triage_ml.dev_api.app.get_api_config", lambda: permissive)
     reset_api_config_cache()
     try:
         with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):

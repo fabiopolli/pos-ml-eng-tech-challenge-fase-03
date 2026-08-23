@@ -103,7 +103,7 @@ Os comandos da API, Airflow e stack de observabilidade serão acrescentados quan
 - [x] Criar repositório e definir arquitetura inicial — Fábio
 - [x] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
 - [x] Treinar classificador de texto (baseline TF-IDF + classificador linear) — Bill
-- [~] Construir API FastAPI — Romário (Bill disponibilizou uma API de smoke em `src/triage_ml/api/` para acelerar testes locais)
+- [~] Construir API FastAPI — Romário (Bill disponibilizou uma API de desenvolvimento em `src/triage_ml/dev_api/` para acelerar validações locais; não é a entrega oficial)
 - [~] Configurar CI/CD, Docker e testes — Fábio (CI inicial criado; Docker pendente)
 - [ ] Implementar DAG Airflow funcional — Denis
 - [ ] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill
@@ -166,15 +166,17 @@ PYTHONPATH=src uv run python -m triage_ml.models.train \
 
 Hiperparâmetros editáveis em `configs/training.yaml`.
 
-### Como rodar a API de smoke
+### Como rodar a API de desenvolvimento
+
+A API de desenvolvimento fica em [`src/triage_ml/dev_api/`](src/triage_ml/dev_api/) e **consome o modelo real treinado** (`models/<versão>/model.joblib`). Não é um stub. O nome `dev_api` deixa explícito que é uma API de validação local — a API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará o contrato desta.
 
 ```bash
 # Sem MODEL_PATH: a API escolhe automaticamente a versão timestampada mais recente em models/
-PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # Ou fixando um artefato específico
 export MODEL_PATH=models/20260823T135811Z-bed2194376bc/model.joblib
-PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 ```
 
 Endpoints:
@@ -183,7 +185,7 @@ Endpoints:
 - `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` com HTTP 422 e nunca vazam o texto clínico.
 - Toda resposta de predição traz `X-Request-ID` (gerado internamente) e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo), prontos para a Etapa 6 (Prometheus/Grafana).
 
-Variável de ambiente: `MODEL_PATH`, apontando para o `model.joblib` versionado. Sem ela, a smoke local usa o artefato timestampado mais recente em `models/`; a aplicação falha rapidamente se o artefato estiver ausente ou incompatível. Os nomes das classes vêm somente do `metadata.json`.
+Variável de ambiente: `MODEL_PATH`, apontando para o `model.joblib` versionado. Sem ela, a API dev local usa o artefato timestampado mais recente em `models/`; a aplicação falha rapidamente se o artefato estiver ausente ou incompatível. Os nomes das classes vêm somente do `metadata.json`.
 
 #### Política de idioma (`langid` local)
 
@@ -199,9 +201,9 @@ O detector é `langid`, roda 100% local, sem rede. O score é normalizado de log
 
 A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já expõe `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` para acelerar a integração.
 
-### Como rodar o dashboard de smoke
+### Como rodar o dashboard de desenvolvimento
 
-Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em [`front/app_smoke.py`](front/app_smoke.py). Ele fala HTTP contra qualquer instância da API (URL configurável na sidebar; default `http://127.0.0.1:8000`) e tem três abas:
+Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em [`front/app_dev.py`](front/app_dev.py). Ele fala HTTP contra qualquer instância da API (URL configurável na sidebar; default `http://127.0.0.1:8000`) e tem três abas:
 
 - **Health** — chama `GET /health` e mostra `status`, `model_version`, `model_loaded`.
 - **Predição** — área de texto + `POST /predict` exibindo `label`, `label_name`, `score`, `latency_ms`, `request_id` e os headers `X-Request-ID` / `Server-Timing`.
@@ -209,10 +211,10 @@ Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em 
 
 ```bash
 # 1. Suba a API em outro terminal
-PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # 2. Abra o dashboard
-uv run streamlit run front/app_smoke.py
+uv run streamlit run front/app_dev.py
 ```
 
 O dashboard **não** persiste payloads nem textos; latência, taxa de erro e volume continuam no stack **Prometheus + Grafana** (`monitoring/`). Mais detalhes em [`front/README.md`](front/README.md).

@@ -1,4 +1,4 @@
-"""Pydantic schemas for the smoke API.
+"""Pydantic schemas for the dev API.
 
 These schemas are the initial proposal documented in
 ``docs/plans/PLAN-text-classifier.md``. They are **subject to validation

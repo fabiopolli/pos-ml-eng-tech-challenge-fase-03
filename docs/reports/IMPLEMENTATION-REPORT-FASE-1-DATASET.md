@@ -146,7 +146,7 @@ A Etapa 2 (Bill) consome o contrato canônico da Etapa 1 sem nenhum workaround:
 - `prepare_dataset(raw, sample_size=5_000, random_state=42)` é chamado em `triage_ml.models.train.run_training` para gerar o `DataFrame` canônico.
 - Os **fingerprints** SHA-256 do CSV bruto, do dataset preparado e dos splits de treino/teste são registrados no `metadata.json` (`fingerprints.raw_csv_sha256`, `prepared_dataset_sha256`, `train_split_sha256`, `test_split_sha256`).
 - `split_dataset` garante `text` ∩ `text` = ∅ entre treino e teste. A asserção é executada a cada treino e quebra o pipeline se for violada.
-- O label mapping vive em `configs/training.yaml` e é copiado para `metadata.json` — a API de smoke da Etapa 2 lê o mapping do manifesto e **não** mais do CSV em runtime.
+- O label mapping vive em `configs/training.yaml` e é copiado para `metadata.json` — a API de desenvolvimento da Etapa 2 lê o mapping do manifesto e **não** mais do CSV em runtime.
 
 ## 6. Privacidade operacional
 
