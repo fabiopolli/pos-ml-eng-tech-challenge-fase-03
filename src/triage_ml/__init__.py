@@ -1,2 +1,1 @@
 """Medical text triage project."""
-

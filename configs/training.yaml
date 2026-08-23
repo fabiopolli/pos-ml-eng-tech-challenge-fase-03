@@ -1,0 +1,39 @@
+# Hyperparameters for the baseline text classifier.
+#
+# These values are loaded by ``triage_ml.models.train.run_training`` and
+# persisted (lightly) into ``metadata.json`` so that a model version is
+# reproducible from the version control history.
+
+random_state: 42
+sample_size: 5000
+test_size: 0.2
+
+# Default classifier used by ``build_pipeline`` and ``run_training``.
+classifier: logreg  # one of: logreg, linear_svc
+
+# TF-IDF preprocessing. Conservative defaults that work well on medical
+# abstracts of ~1k characters (median). Tokens are kept simple and
+# reproducible so that downstream serialization is deterministic.
+tfidf:
+  ngram_range: [1, 2]
+  min_df: 2
+  max_df: 0.95
+  sublinear_tf: true
+  lowercase: true
+  token_pattern: "(?u)\\b\\w+\\b"
+
+# Logistic Regression hyperparameters (used when ``classifier: logreg``).
+logreg:
+  solver: lbfgs
+  max_iter: 2000
+  class_weight: balanced
+  C: 1.0
+
+# LinearSVC hyperparameters (used when ``classifier: linear_svc``).
+linear_svc:
+  class_weight: balanced
+  C: 1.0
+
+# Default model version published by ``run_training``.
+model_version: v1
+model_name: triage_ml_tfidf_logreg
