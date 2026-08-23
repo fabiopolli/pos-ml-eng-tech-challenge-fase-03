@@ -5,7 +5,7 @@
 | Integrante | Will (Bill) |
 | Etapa do checklist | Etapa 2 (baseline) — `docs/CHECKLIST.md` reordenado em 2026-08-23 |
 | Período desta entrega | 2026-08-23 (uma única sessão de trabalho) |
-| Última revisão | commit `d1cbe3f` em `origin/main` + checagem de idioma na `/predict` |
+| Última revisão | commit `d1cbe3f` em `origin/main` + checagem de idioma na `/predict` + dashboard de smoke |
 | Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Fase 2 |
 
 Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma API de smoke que outros integrantes (Romário, Denis, Fábio) possam consumir sem stubs. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
@@ -16,7 +16,7 @@ Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — F
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
 - API de smoke FastAPI expõe `GET /health` e `POST /predict` com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana).
-- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API e política de idioma: **44 testes verdes** em `uv run pytest`.
+- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **50 testes verdes** em `uv run pytest`.
 - Lint e formatação verdes (`ruff check .` / `ruff format .`).
 
 ## 2. Escopo e alinhamento com o plano
@@ -243,13 +243,31 @@ Cobertura por arquivo:
 | `tests/test_model_training.py` | 1 | Integração `run_training + load_artifact` em dataset sintético, garantindo `selection.candidates = {logreg, linear_svc}`, `test_set_used_for_selection=False`, balanced_accuracy presente, `pipeline.classes_ == metadata.classes` |
 | `tests/test_api_smoke.py` | 12 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado |
 | `tests/test_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
+| `tests/test_dashboard_helpers.py` | 6 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`) — mocka `requests.request`, não precisa de API rodando |
 
 Comando único:
 
 ```bash
-uv run pytest   # 44 passed in ~3s
+uv run pytest   # 50 passed in ~3s
 uv run ruff check .
 uv run ruff format .
+```
+
+### 6.1 Dashboard de smoke (`front/app_smoke.py`)
+
+Ferramenta opcional para o desenvolvedor exercitar `/health` e `/predict` manualmente sem `curl`. Stacklit em modo HTTP contra qualquer URL da API (default `http://127.0.0.1:8000`, configurável na sidebar). Três abas:
+
+- **Health** — chama `GET /health` e mostra `status`, `model_version`, `model_loaded`.
+- **Predição** — área de texto + `POST /predict` exibindo `label`, `label_name`, `score`, `latency_ms`, `request_id` e os headers `X-Request-ID` / `Server-Timing`.
+- **Política de idioma** — quatro cenários canônicos da política configurada em `configs/api.yaml` (texto curto, score baixo, idioma fora do allow-list, inglês válido), com validação automática do `error_code` retornado pela API.
+
+O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos. Validação manual local usando os próprios helpers contra a API rodando em `127.0.0.1:8765`:
+
+```text
+HEALTH 200 {'status': 'ok', 'model_version': '20260823T135811Z-bed2194376bc', 'model_loaded': True}
+PRED OK 200 neoplasms timing= detect;dur=881.603, predict;dur=8.982
+SHORT 422 text_too_short_for_language_check det= None
+UNSUP 422 unsupported_language det= pt score= 1.5e-177
 ```
 
 ## 7. Riscos conhecidos e trabalho futuro
@@ -317,11 +335,15 @@ tests/
 ├── test_model_artifact.py
 ├── test_model_training.py
 ├── test_api_smoke.py
-└── test_api_language.py
+├── test_api_language.py
+└── test_dashboard_helpers.py
 
 configs/
 ├── training.yaml                                    (hiperparâmetros + label_mapping)
 └── api.yaml                                          (allow-list de idiomas + thresholds)
+front/
+├── app_smoke.py                                      (dashboard Streamlit de smoke manual)
+└── README.md                                         (instruções e escopo)
 ```
 
 ## 10. Conclusão

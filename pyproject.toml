@@ -16,6 +16,8 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.27",
     "langid>=1.1.6",
+    "streamlit>=1.62.0",
+    "requests>=2.34.2",
 ]
 
 [dependency-groups]

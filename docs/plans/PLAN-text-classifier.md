@@ -81,7 +81,8 @@ tests/
 ├── test_model_pipeline.py
 ├── test_model_artifact.py
 ├── test_api_smoke.py
-└── test_api_language.py
+├── test_api_language.py
+└── test_dashboard_helpers.py  # helpers HTTP do dashboard (mocks requests)
 models/
 └── README.md                  (existente; artefatos permanecem fora do Git)
 reports/
@@ -93,6 +94,9 @@ reports/
 configs/
 ├── training.yaml              # hiperparâmetros e label mapping versionados
 └── api.yaml                   # allow-list de idiomas + thresholds da política de idioma
+front/
+├── app_smoke.py               # dashboard Streamlit para exercitar /health e /predict
+└── README.md                  # instruções de uso e escopo do dashboard
 ```
 
 A pasta `monitoring/` não é tocada na Fase 1.
@@ -186,6 +190,7 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 - Adicionar seção "Modelo (Bill)" no `README.md` resumindo tarefa real (categorias clínicas), abordagem, classes e como rodar treino + API local; incluir a justificativa formal de não-uso de Random Forest.
 - Atualizar `.agents/contracts/README.md` se o formato de `metadata.json` divergir.
 - Documentar a checagem de idioma (`langid`): nova subseção no README + entrada no `IMPLEMENTATION-REPORT-FASE-1.md` + linha de evolução no CHECKLIST; atualizar o plano (este arquivo) com a camada de contrato e os arquivos novos.
+- Documentar o dashboard de smoke (`front/app_smoke.py`): subseção no README, README próprio em `front/README.md`, evolução no CHECKLIST; deixar claro que **não substitui Prometheus/Grafana**.
 
 ## F1. Critérios de aceite
 

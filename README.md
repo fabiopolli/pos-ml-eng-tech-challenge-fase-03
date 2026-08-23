@@ -199,10 +199,28 @@ O detector é `langid`, roda 100% local, sem rede. O score é normalizado de log
 
 A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já expõe `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` para acelerar a integração.
 
+### Como rodar o dashboard de smoke
+
+Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em [`front/app_smoke.py`](front/app_smoke.py). Ele fala HTTP contra qualquer instância da API (URL configurável na sidebar; default `http://127.0.0.1:8000`) e tem três abas:
+
+- **Health** — chama `GET /health` e mostra `status`, `model_version`, `model_loaded`.
+- **Predição** — área de texto + `POST /predict` exibindo `label`, `label_name`, `score`, `latency_ms`, `request_id` e os headers `X-Request-ID` / `Server-Timing`.
+- **Política de idioma** — quatro cenários canônicos (texto curto, confiança baixa, idioma fora do allow-list, inglês válido) com validação automática do `error_code` retornado.
+
+```bash
+# 1. Suba a API em outro terminal
+PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+
+# 2. Abra o dashboard
+uv run streamlit run front/app_smoke.py
+```
+
+O dashboard **não** persiste payloads nem textos; latência, taxa de erro e volume continuam no stack **Prometheus + Grafana** (`monitoring/`). Mais detalhes em [`front/README.md`](front/README.md).
+
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 44 testes do baseline, artefato, treino, API e idioma
+uv run pytest             # 50 testes do baseline, artefato, treino, API, idioma e dashboard
 uv run ruff check .       # lint
 uv run ruff format .      # format
 ```
