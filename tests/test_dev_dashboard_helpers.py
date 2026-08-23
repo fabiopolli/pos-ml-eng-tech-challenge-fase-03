@@ -12,6 +12,7 @@ import guard below) — when not available, only the pure helpers execute.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -53,16 +54,10 @@ class _FakeResponse:
         self._body = body
         self.headers = headers or {}
         self.elapsed = type("elapsed", (), {"total_seconds": lambda self: elapsed_seconds})()
-        self.text = json_dumps(body)
+        self.text = json.dumps(body, ensure_ascii=False)
 
     def json(self) -> object:
         return self._body
-
-
-def json_dumps(value: object) -> str:
-    import json
-
-    return json.dumps(value, ensure_ascii=False)
 
 
 def test_health_calls_endpoint_and_parses_response(dashboard_module):
@@ -161,3 +156,32 @@ def test_url_stripping_handles_trailing_slash(dashboard_module):
     url = mocked.call_args.kwargs.get("url") or mocked.call_args.args[1]
     assert method == "GET"
     assert url == "http://api.example.com/health"
+
+
+def test_documentation_shortcuts_point_to_existing_files(dashboard_module):
+    """The sidebar shortcuts resolve to real markdown files via file:// URIs.
+
+    Regression for the broken relative links (they used to point to
+    ``/docs/...`` inside the Streamlit server, which 404s).
+    """
+
+    expected = {
+        dashboard_module.DOC_PLAN: "Plan do classificador",
+        dashboard_module.DOC_CHECKLIST: "Checklist oficial",
+        dashboard_module.DOC_REPORT_FASE_1: "Relatório Fase 1",
+    }
+    for path, label in expected.items():
+        assert path.is_file(), f"{label} target missing: {path}"
+        uri = path.as_uri()
+        assert uri.startswith("file:///"), f"{label} uri malformed: {uri}"
+        assert path.name in uri, f"{label} uri should mention the filename"
+
+
+def test_repo_root_is_above_dashboard(dashboard_module):
+    """``REPO_ROOT`` walks one level up from ``front/app_dev.py`` to the repo root."""
+
+    # This test lives at ``tests/test_dev_dashboard_helpers.py`` so its
+    # parent is the project root; the dashboard lives at
+    # ``<root>/front/app_dev.py`` and ``REPO_ROOT`` should match.
+    expected_root = Path(__file__).resolve().parents[1]
+    assert dashboard_module.REPO_ROOT.resolve() == expected_root.resolve()
