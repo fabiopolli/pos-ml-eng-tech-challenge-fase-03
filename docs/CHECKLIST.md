@@ -2,13 +2,13 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-08-14 — preparação reproduzível e documentação do dataset.
+Última atualização: 2026-08-23 — reordenação das etapas para refletir a dependência real entre dados, modelo, API, otimização e observabilidade.
 
 ## Visão geral e responsáveis
 
 - [x] Repositório e arquitetura inicial — Fábio
 - [x] EDA e escolha do dataset — Denis
-- [ ] Classificador de texto — Bill
+- [ ] Classificador de texto (baseline) — Bill
 - [ ] API FastAPI — Romário
 - [~] CI/CD, Docker e testes — Fábio
 - [ ] DAG Airflow — Denis
@@ -16,6 +16,8 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 - [ ] Arquitetura em nuvem — Romário
 - [~] Documentação detalhada — Fábio
 - [ ] Vídeo STAR — Romário
+
+> Mudança 2026-08-23: o item "Classificador de texto" agora descreve apenas o baseline. A otimização do modelo aparece dentro de "Otimização de latência e observabilidade", alinhada à Etapa 5 do novo plano. Mantemos dois itens no checklist por refletir a divisão de pesos da banca.
 
 ## Requisitos transversais
 
@@ -28,7 +30,9 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 - [ ] Nenhum segredo ou dado clínico sensível versionado ou emitido em logs.
 - [ ] Ativar proteção da `main` após o primeiro CI verde: PR, checks, uma aprovação e bloqueio de force-push.
 
-## Etapa 1 — Decisão arquitetural e API inicial
+> Mudança 2026-08-23: o requisito "nenhum segredo/dado clínico em logs" ganhou dono implícito (Bill, na Etapa 6 — observabilidade) e critério verificável (teste automatizado que varre labels Prometheus, payloads de erro e formato de logs).
+
+## Etapa 1 — Fundação, dados e contratos
 
 ### Dataset e EDA — Denis
 
@@ -41,18 +45,16 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 
 Aceite: notebook/relatório reprodutível, dataset escolhido e contrato de dados aprovado.
 
-### API FastAPI — Romário
+### Contratos compartilhados — todos (gate humano)
 
-- [ ] Validar contrato de `POST /predict`.
-- [ ] Implementar health check, predição, validação e erros.
-- [ ] Carregar artefato do modelo de forma configurável.
-- [ ] Adicionar testes unitários e de integração.
-- [ ] Empacotar o serviço em Docker.
-- [ ] Medir baseline de latência local com metodologia documentada.
+- [x] Contrato de dados definido em `.agents/contracts/README.md`.
+- [x] Contrato de modelo (versão, classes, métricas, preprocessing) e serialização segundo contrato.
+- [x] Contrato de API inicial proposto; sujeito à validação de Romário antes de promover.
+- [ ] Contrato de Airflow/artefato (caminho configurável, idempotência) revisado por Denis antes da Etapa 7.
 
-Aceite oficial: API funcional em Docker e baseline de tempo de resposta.
+Aceite: contratos em `.agents/contracts/README.md` estáveis antes do início da Etapa 2.
 
-### Arquitetura em nuvem — Romário
+### Arquitetura em nuvem — Romário (ADR pode começar em paralelo)
 
 - [~] Direção inicial: real-time para inferência e batch para treino/re-treino.
 - [ ] Comparar opções e validar/refutar GCP Cloud Run, Artifact Registry e Cloud Storage.
@@ -60,78 +62,105 @@ Aceite oficial: API funcional em Docker e baseline de tempo de resposta.
 - [ ] Avaliar segurança, privacidade, disponibilidade, escala e custos.
 - [ ] Registrar ADR e sintetizar decisão no README.
 
-Aceite oficial: decisão arquitetural textual clara e coerente com batch versus real-time.
+Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerente com batch versus real-time.
 
-## Etapa 2 — CI/CD e pipeline automatizado
+## Etapa 2 — Modelo baseline e serialização (Bill)
 
-### CI/CD, Docker e testes — Fábio
-
-- [x] Criar CI inicial com lint e pytest em push/PR para `main`.
-- [ ] Ampliar testes conforme API, modelo e DAG forem integrados.
-- [ ] Criar Dockerfile funcional para inferência.
-- [ ] Adicionar build da imagem ao CI.
-- [ ] Documentar execução local e no CI.
-- [ ] Confirmar primeiro workflow verde no GitHub.
-
-Aceite oficial (15%): GitHub Actions executando ao menos lint e testes básicos.
-
-### DAG Airflow — Denis
-
-- [ ] Implementar ingestão/leitura do CSV.
-- [ ] Implementar validação/preparação.
-- [ ] Implementar treino e avaliação.
-- [ ] Persistir artefato e metadados.
-- [ ] Garantir configuração portátil e tarefas idempotentes quando possível.
-- [ ] Testar/importar a DAG sem erros e registrar evidência de execução.
-
-Aceite oficial (15%): DAG funcional realizando ingestão e treino, com modelo salvo.
-
-## Etapa 3 — Monitoramento e observabilidade
-
-### Instrumentação e stack — Bill
-
-- [ ] Expor métricas com `prometheus_client`.
-- [ ] Medir total de requisições por rota/status.
-- [ ] Medir latência/tempo de resposta.
-- [ ] Medir total/taxa de erros.
-- [ ] Evitar labels de alta cardinalidade e conteúdo clínico.
-- [ ] Configurar Compose com API, Prometheus e Grafana.
-- [ ] Provisionar dashboard reprodutível em JSON.
-- [ ] Criar pelo menos três painéis: requisições, latência e erros.
-- [ ] Salvar print e JSON do dashboard.
-
-Aceite oficial (20%): stack completa no Compose e dashboard exibindo as métricas propostas.
-
-## Etapa 4 — Modelo, otimização e entrega
-
-### Modelagem e otimização — Bill
+### Modelagem baseline — Bill
 
 - [ ] Criar baseline leve, por exemplo TF-IDF + classificador Scikit-Learn.
 - [ ] Fixar seeds, preprocessing e versões relevantes.
 - [ ] Reportar métricas adequadas por classe e agregadas.
 - [ ] Serializar modelo e metadados segundo o contrato.
+- [ ] API de smoke local (`/health` + `/predict`) consumindo o artefato serializado, com `latency_ms`, `request_id` e headers `X-Request-ID` / `Server-Timing`.
+
+Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, métricas reportadas, artefato e API de smoke prontos. A otimização em si entra na Etapa 5.
+
+## Etapa 3 — API oficial servindo o modelo (Romário)
+
+### API FastAPI — Romário
+
+- [ ] Validar contrato de `POST /predict` (já alinhado com a smoke de Bill).
+- [ ] Implementar health check, predição, validação e erros com base no artefato real, sem stub.
+- [ ] Carregar artefato do modelo de forma configurável (env `MODEL_PATH`).
+- [ ] Manter `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` herdados da Etapa 2.
+- [ ] Adicionar testes unitários e de integração.
+- [ ] Medir baseline de latência local com metodologia documentada (gancho para a Etapa 5).
+- [ ] Empacotar o serviço em Docker (parte do entregável do Fábio, mas dirigido a esta API).
+
+Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta documentado.
+
+## Etapa 4 — CI/CD e Docker (Fábio)
+
+### CI/CD, Docker e testes — Fábio
+
+- [x] Criar CI inicial com lint e pytest em push/PR para `main`.
+- [ ] Ampliar testes conforme API, modelo e DAG forem integrados.
+- [ ] Criar Dockerfile funcional para inferência (imagem da API oficial).
+- [ ] Adicionar build da imagem ao CI.
+- [ ] Documentar execução local e no CI.
+- [ ] Confirmar primeiro workflow verde no GitHub.
+
+Aceite oficial (15%): GitHub Actions executando ao menos lint e testes básicos, build da imagem verde.
+
+## Etapa 5 — Otimização do modelo (Bill)
+
+### Otimização do classificador — Bill
+
 - [ ] Aplicar ao menos uma técnica vista em aula: ONNX, quantização ou pruning.
-- [ ] Comparar baseline e otimizado nas mesmas entradas/condições.
-- [ ] Demonstrar melhoria de latência sem degradação inaceitável de qualidade.
+- [ ] Comparar baseline e otimizado nas mesmas entradas/condições (mesmo split, mesma função de inferência do contrato).
+- [ ] Demonstrar melhoria de latência sem degradação inaceitável de qualidade (Δ macro-F1 ≤ 1 pp no split de teste).
+- [ ] Persistir `model.onnx` (ou equivalente) e `benchmark.json` ao lado do `model.joblib`.
+- [ ] Expor a versão otimizada na API oficial atrás de uma flag (ex.: `MODEL_VARIANT=onnx|sklearn`) para a Etapa 6 medir os dois lados.
 
-Aceite oficial (20%): modelo NLP funcional, otimização bem-sucedida e melhoria demonstrada.
+Aceite parcial (junto com Etapa 6 fecha o 20% oficial): otimização bem-sucedida e melhoria demonstrada.
 
-### Tradução
+## Etapa 6 — Observabilidade e stack Prometheus/Grafana (Bill)
 
-- [x] Não inserir tradução online no caminho crítico da fundação.
-- [ ] Após escolha do dataset, confirmar se o produto precisa receber português.
-- [ ] Se necessário, avaliar tradução offline, versionada e mensurada.
-- [ ] Documentar efeitos em qualidade, privacidade, custo e latência.
+### Instrumentação e stack — Bill
+
+- [ ] Expor métricas com `prometheus_client` no middleware da API oficial.
+- [ ] Medir total de requisições por rota/status.
+- [ ] Medir latência/tempo de resposta (reaproveitando `Server-Timing` da Etapa 2).
+- [ ] Medir total/taxa de erros.
+- [ ] Evitar labels de alta cardinalidade e conteúdo clínico. Teste automatizado varre labels aceitos.
+- [ ] Configurar Compose com API, Prometheus e Grafana.
+- [ ] Provisionar dashboard reprodutível em JSON com pelo menos quatro painéis: requisições, latência p95, erros e comparação baseline vs otimizado.
+- [ ] Salvar print e JSON do dashboard em `reports/figures/`.
+
+Aceite oficial (junto com Etapa 5 fecha 20%): stack completa no Compose e dashboard exibindo as métricas propostas, incluindo o comparativo baseline vs otimizado.
+
+### Privacidade e segurança operacional — Bill
+
+- [ ] Garantir que `text` nunca aparece em logs, payloads de erro ou labels de métrica (teste de fumaça).
+- [ ] Documentar a política de não retenção do `text` após a resposta.
+
+## Etapa 7 — Orquestração de retreino (Denis)
+
+### DAG Airflow — Denis
+
+- [ ] Consumir `triage_ml.models.train.run_training` (ou equivalente) em vez de duplicar lógica.
+- [ ] Implementar ingestão/leitura do CSV.
+- [ ] Implementar validação/preparação reaproveitando `triage_ml.data.prepare`.
+- [ ] Implementar treino e avaliação.
+- [ ] Persistir artefato e metadados no caminho configurável do contrato.
+- [ ] Garantir configuração portátil e tarefas idempotentes quando possível.
+- [ ] Testar/importar a DAG sem erros e registrar evidência de execução.
+- [ ] Suportar retreino disparando a partir da Etapa 8 (cloud) ou manualmente.
+
+Aceite oficial (15%): DAG funcional realizando ingestão e treino, com modelo salvo no caminho versionado.
+
+## Etapa 8 — Cloud, vídeo e documentação final
 
 ### Documentação — Fábio
 
 - [~] Manter README e checklist como documentos vivos.
 - [ ] Documentar setup, execução, testes, API, Airflow, Compose e troubleshooting.
 - [ ] Consolidar arquitetura em nuvem após ADR de Romário.
-- [ ] Documentar metodologia e resultados do benchmark.
+- [ ] Documentar metodologia e resultados do benchmark baseline vs otimizado (entrega da Etapa 5).
 - [ ] Revisar links, comandos e afirmações contra o sistema final.
 
-Aceite oficial (15%): arquitetura em nuvem explicada e instruções claras de execução.
+Aceite parcial (15% oficial, junto com cloud ADR e vídeo): arquitetura em nuvem explicada e instruções claras de execução.
 
 ### Vídeo STAR — Romário
 
@@ -144,7 +173,13 @@ Aceite oficial (15%): arquitetura em nuvem explicada e instruções claras de ex
 
 Aceite oficial (15%): demonstração técnica clara, impacto explicado e duração respeitada.
 
+## Tradução
+
+- [x] Não inserir tradução online no caminho crítico da fundação.
+- [ ] Após escolha do dataset, confirmar se o produto precisa receber português.
+- [ ] Se necessário, avaliar tradução offline, versionada e mensurada.
+- [ ] Documentar efeitos em qualidade, privacidade, custo e latência.
+
 ## Regra de atualização
 
 Todo agente confere este arquivo em cada tarefa. Só o edita quando status, escopo, responsável, critério de aceite ou evidência mudar. Todo PR declara “checklist atualizado” ou “checklist conferido, sem alteração necessária”.
-
