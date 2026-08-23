@@ -18,6 +18,8 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 - [ ] Vídeo STAR — Romário
 
 > Mudança 2026-08-23: o item "Classificador de texto" agora descreve apenas o baseline. A otimização do modelo aparece dentro de "Otimização de latência e observabilidade", alinhada à Etapa 5 do novo plano. Mantemos dois itens no checklist por refletir a divisão de pesos da banca.
+>
+> Atualização 2026-08-23 (revisão de Fase 1): a Etapa 2 foi endurecida com `metadata.schema_version`, versionamento imutável `YYYYMMDDTHHMMSSZ-<input_hash>`, validação de manifesto + checksum antes da desserialização e seleção entre LogisticRegression/LinearSVC por validação cruzada estratificada de 5 folds somente no treino. LinearSVC foi o vencedor (`0.7335` vs `0.7319` mean macro-F1). Artefatos em `models/v1/` legados não passam mais na validação — cada novo treino cria uma versão imutável.
 
 ## Requisitos transversais
 

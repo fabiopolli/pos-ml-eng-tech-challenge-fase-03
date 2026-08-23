@@ -169,14 +169,19 @@ Hiperparâmetros editáveis em `configs/training.yaml`.
 ### Como rodar a API de smoke
 
 ```bash
-export MODEL_PATH=models/YYYYMMDDTHHMMSSZ-input_hash/model.joblib
+# Sem MODEL_PATH: a API escolhe automaticamente a versão timestampada mais recente em models/
+PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+
+# Ou fixando um artefato específico
+export MODEL_PATH=models/20260823T135811Z-bed2194376bc/model.joblib
 PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
 ```
 
 Endpoints:
 
-- `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`.
+- `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`. Se o artefato estiver ausente ou inválido, a aplicação **não sobe** (RuntimeError no startup).
 - `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message)` com HTTP 422 e nunca vazam o texto clínico.
+- Toda resposta de predição traz `X-Request-ID` (gerado internamente) e `Server-Timing: predict;dur=<latency_ms>`, prontos para a Etapa 6 (Prometheus/Grafana).
 
 Variável de ambiente: `MODEL_PATH`, apontando para o `model.joblib` versionado. Sem ela, a smoke local usa o artefato timestampado mais recente em `models/`; a aplicação falha rapidamente se o artefato estiver ausente ou incompatível. Os nomes das classes vêm somente do `metadata.json`.
 
@@ -185,7 +190,7 @@ A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etap
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 34 testes
+uv run pytest             # 34 testes do baseline, artefato, treino e API
 uv run ruff check .       # lint
 uv run ruff format .      # format
 ```
