@@ -194,8 +194,8 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
   - `text` é normalizado via `Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20000)]`.
   - Inferência registrada em `latency_ms` com `time.perf_counter`.
   - `score` vem de `predict_proba` quando disponível — `LinearSVC` não expõe probabilidades calibradas, então `score` é `null` para o artefato selecionado (informado em `README.md`).
-  - **Erros são sanitizados**: handler para `RequestValidationError` e `HTTPException` devolve `ErrorOut(request_id, error_code, message)` sem vazar texto clínico. Handler genérico para `Exception` captura qualquer caminho não tratado e devolve 500 também sanitizado.
-- **Headers em toda resposta**: `X-Request-ID` (gerado internamente — o cliente nunca controla o valor) e `Server-Timing: predict;dur=<latency_ms>` quando `latency_ms` foi medido.
+  - **Erros são sanitizados**: handler para `RequestValidationError` e `HTTPException` devolve `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` sem vazar texto clínico. Handler genérico para `Exception` captura qualquer caminho não tratado e devolve 500 também sanitizado.
+- **Headers em toda resposta**: `X-Request-ID` (gerado internamente — o cliente nunca controla o valor) e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo antes do pipeline).
 - **Modelo carregado**: via `MODEL_PATH` (env) ou autodetecção da versão mais recente `YYYYMMDDTHHMMSSZ-*` em `models/`. Sem artefato, falha imediatamente.
 
 ### 5.1 Checagem de idioma (`langid` local)

@@ -74,11 +74,14 @@ src/triage_ml/
 └── api/
     ├── __init__.py
     ├── app.py                 # FastAPI mínimo com /health e /predict
-    └── schemas.py             # Pydantic de entrada/saída
+    ├── schemas.py             # Pydantic de entrada/saída
+    ├── language.py            # detector langid + política de idioma
+    └── config.py              # ApiConfig (LRU cache) carregado de configs/api.yaml
 tests/
 ├── test_model_pipeline.py
 ├── test_model_artifact.py
-└── test_api.py
+├── test_api_smoke.py
+└── test_api_language.py
 models/
 └── README.md                  (existente; artefatos permanecem fora do Git)
 reports/
@@ -88,7 +91,8 @@ reports/
     ├── 08_confusion_matrix_linear_svc.png
     └── 08_top_features_linear_svc.png
 configs/
-└── training.yaml              # hiperparâmetros e label mapping versionados
+├── training.yaml              # hiperparâmetros e label mapping versionados
+└── api.yaml                   # allow-list de idiomas + thresholds da política de idioma
 ```
 
 A pasta `monitoring/` não é tocada na Fase 1.
@@ -105,8 +109,9 @@ Pontos relevantes de `.agents/contracts/README.md`:
 - **API (proposta, sujeito à validação de Romário antes de promover)**:
   - `GET /health` → `HealthOut(status, model_version, model_loaded)`.
   - `POST /predict` → `PredictIn(text)` → `PredictOut(label, label_name, score?, model_version, latency_ms, request_id, warnings)`, com score opcional para classificadores sem `predict_proba`.
-  - Erros: `ErrorOut(request_id, error_code, message)` — nunca conteúdo clínico. Um handler próprio sanitiza o `422` do FastAPI/Pydantic, removendo o campo `input` antes da resposta.
-  - Headers: `X-Request-ID` ecoando o `request_id`; `Server-Timing: predict;dur=<latency_ms>`.
+  - **Política de idioma** (camada adicional, fora do contrato inicial da Fase 1 mas incorporada em 2026-08-23): `langid` local roda antes do pipeline. Configuração em `configs/api.yaml` (`supported_languages`, `min_text_chars_for_language_check`, `min_language_score`). Rejeições viram `ErrorOut(request_id, error_code="text_too_short_for_language_check"|"indeterminate_language"|"unsupported_language", message, detected_language?, detected_language_score?)` — o `text` nunca aparece na resposta nem em logs.
+  - Erros: `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` — nunca conteúdo clínico. Um handler próprio sanitiza o `422` do FastAPI/Pydantic, removendo o campo `input` antes da resposta.
+  - Headers: `X-Request-ID` ecoando o `request_id`; `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` quando ambos rodam, ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo.
 - **Observabilidade**: adiada como stack completa. Mas a Fase 1 já nasce expondo latência e `request_id` em toda resposta para reuso na Fase 2.
 
 ### O que **não** entra na Fase 1
@@ -116,6 +121,7 @@ Pontos relevantes de `.agents/contracts/README.md`:
 - Otimização ONNX, quantização ou pruning.
 - Compose, Prometheus, Grafana, dashboard.
 - Autenticação, rate limit, tracing distribuído.
+- Tradução automática pt-BR→en (rejeitada por LGPD/latência). A política de idioma com `langid` é puramente **checagem** local, sem tradução.
 
 ## F1. Tarefas e sequência
 
@@ -149,33 +155,37 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
   - `PredictIn(text: constr(strip_whitespace=True, min_length=1, max_length=20000))`.
   - `PredictOut(label, label_name, score: float | None, model_version, latency_ms, request_id, warnings)`.
   - `HealthOut(status, model_version, model_loaded)`.
-  - `ErrorOut(request_id, error_code, message)`.
+  - `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)`.
 - `src/triage_ml/api/app.py`:
   - `GET /health` → `HealthOut`.
-  - `POST /predict` → `PredictIn` → `PredictOut`.
+  - `POST /predict` → `PredictIn` → `PredictOut` (com checagem de idioma antes do pipeline).
+  - Camada de idioma: `detect_language(text, ...)` aplicado após validação de schema. Falhas viram `UnsupportedLanguageError`, mapeadas para `error_code` apropriado.
 - App factory com injeção do carregador nos testes; carregamento no startup via `lifespan`, com falha rápida para artefato ausente/incompatível e `MODEL_PATH` configurável por env var.
 - Mapeamento `condition_label → condition_name` lido do `metadata.json`, sem depender de CSV ignorado pelo Git em runtime.
 - Handler de `RequestValidationError` remove valores de entrada do `422` e responde no formato `ErrorOut`.
 - Middleware/dependência:
   - Gera `request_id` (`uuid.uuid4().hex[:12]`) em `request.state.request_id`.
-  - Mede `latency_ms` com `time.perf_counter()` em torno do `pipeline.predict`/`predict_proba`.
+  - Mede `latency_ms` com `time.perf_counter()` em torno do `pipeline.predict`/`predict_proba`. Mede `detect_latency_ms` ao redor de `detect_language`.
   - Ecoa `request_id` em `X-Request-ID`.
-  - Emite `Server-Timing: predict;dur=<latency_ms>`.
+  - Emite `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` se a checagem interrompeu o fluxo).
   - Captura exceções inesperadas, preserva erros HTTP conhecidos e retorna `ErrorOut` com `error_code` genérico; loga apenas `request_id`, rota, status e latência (nunca `text` nem corpo da requisição).
 - `uvicorn triage_ml.api.app:app --reload` deve subir e responder nos dois endpoints.
-- `tests/test_api.py` cobre `/health`, `/predict`, artefato inválido, texto vazio, sanitização de erro, `X-Request-ID`, `Server-Timing` e ausência do texto em logs/respostas de erro.
+- `tests/test_api_smoke.py` cobre `/health`, `/predict`, artefato inválido, texto vazio, sanitização de erro, `X-Request-ID`, `Server-Timing` e ausência do texto em logs/respostas de erro.
+- `tests/test_api_language.py` cobre cada branch da política (`text_too_short_for_language_check`, `indeterminate_language`, `unsupported_language`), valida os campos `detected_language`/`detected_language_score` e confirma que o `text` nunca vaza.
 
 ### F1.T5. Teste manual e evidências
 - Subir a API local, enviar 5 abstracts (incluindo 1 da classe 1 e 1 da classe 5) via `curl`/`httpie` e salvar somente respostas sanitizadas em `reports/evidence/api-smoke.json`; os textos de entrada não são persistidos.
 - Para cada resposta, registrar `request_id`, `label`, `score`, `latency_ms`, headers `X-Request-ID` e `Server-Timing`. Confirmar que `latency_ms` varia entre chamadas.
+- **Cenários da política de idioma**: texto curto (`<20` chars, `error_code=text_too_short_for_language_check`), confiança baixa (mock de `langid.classify` com log-prob saturado, `error_code=indeterminate_language`), idioma fora do allow-list (mock `("pt", -0.1)`, `error_code=unsupported_language`). Cada cenário roda em um `TestClient` isolado com `_strict_lang_config` para forçar o limiar quando necessário.
 - Validar `metadata.json` (chaves, classes, versões).
 - Validar que `text` vazio retorna `422` Pydantic sem vazar conteúdo; `prediction_failed` retorna `ErrorOut` com `request_id`.
-- Confirmar que a evidência versionável não contém os abstracts nem campos `input` do Pydantic.
+- Confirmar que a evidência versionável não contém os abstracts nem campos `input` do Pydantic, nem o `text` enviado.
 
 ### F1.T6. Documentação
 - Atualizar `docs/CHECKLIST.md`: Etapa 2 → `[~]` em progresso, depois `[x]` com evidência. Não tocar em itens de outros donos.
 - Adicionar seção "Modelo (Bill)" no `README.md` resumindo tarefa real (categorias clínicas), abordagem, classes e como rodar treino + API local; incluir a justificativa formal de não-uso de Random Forest.
 - Atualizar `.agents/contracts/README.md` se o formato de `metadata.json` divergir.
+- Documentar a checagem de idioma (`langid`): nova subseção no README + entrada no `IMPLEMENTATION-REPORT-FASE-1.md` + linha de evolução no CHECKLIST; atualizar o plano (este arquivo) com a camada de contrato e os arquivos novos.
 
 ## F1. Critérios de aceite
 
@@ -197,6 +207,9 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 | Modelo não serializa classes corretamente | `tests/test_model_artifact.py` valida `metadata.classes == model.classes_`, schema e checksum |
 | Conteúdo clínico em logs ou no `422` | Handler de validação sanitizado, testes automatizados e revisão das evidências antes de versionar |
 | CI quebrando | Fixar versões em `pyproject.toml`/`uv.lock`; preferir libs já presentes |
+| Receber texto em idioma fora do allow-list (pt-BR, por exemplo) | `langid` local com allow-list `{"en"}` configurável em `configs/api.yaml`; rejeição explícita com `error_code` apropriado e `text` nunca exposto na resposta nem em logs |
+| `langid` instável em entradas muito curtas | Mínimo de 20 caracteres (`min_text_chars_for_language_check`) antes do detector; abaixo disso a API rejeita com `text_too_short_for_language_check` |
+| Score de `langid` ser log-probability (negativo) e não probabilidade calibrada | Normalizador `_normalise_score` com saturação em `[-500, 0]` documentado; `min_language_score` é opt-in porque `exp(-200) ≈ 1e-87` |
 
 ## F1. Sequência de commits (apenas Fase 1)
 
@@ -205,6 +218,7 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 3. `test(models): cover pipeline fit/predict and artifact round-trip`
 4. `feat(api): minimal fastapi smoke app exposing /health and /predict`
 5. `docs(models): update checklist and readme for the baseline classifier`
+6. `feat(api): checagem de idioma na /predict via langid local` (entregue em 2026-08-23; adiciona `language.py`, `config.py`, `configs/api.yaml`, testes e evidência do smoke)
 
 ## F1. Definição de pronto da Fase 1
 
