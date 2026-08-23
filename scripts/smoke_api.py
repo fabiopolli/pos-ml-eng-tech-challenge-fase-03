@@ -36,10 +36,14 @@ def main() -> int:
     client = TestClient(app)
     with client:
         health_resp = client.get("/health")
+        health_resp.raise_for_status()
         health_body = health_resp.json()
+        if not health_body.get("model_loaded"):
+            raise RuntimeError("smoke API did not load the model")
         predict_records: list[dict[str, object]] = []
         for text in FIXTURES:
             resp = client.post("/predict", json={"text": text})
+            resp.raise_for_status()
             payload = resp.json()
             predict_records.append(
                 {
@@ -51,31 +55,22 @@ def main() -> int:
                     "request_id": payload.get("request_id"),
                     "warnings": payload.get("warnings"),
                     "headers_x_request_id": resp.headers.get("x-request-id"),
+                    "header_server_timing": resp.headers.get("server-timing"),
                 }
             )
         empty_resp = client.post("/predict", json={"text": ""})
+        if empty_resp.status_code != 422:
+            raise RuntimeError(f"empty text returned HTTP {empty_resp.status_code}, expected 422")
         empty_record = {
             "status_code": empty_resp.status_code,
             "body": empty_resp.json(),
             "headers_x_request_id": empty_resp.headers.get("x-request-id"),
         }
-        custom_resp = client.post(
-            "/predict",
-            json={"text": FIXTURES[0]},
-            headers={"X-Request-ID": "rid-test-1"},
-        )
-        custom_record = {
-            "status_code": custom_resp.status_code,
-            "headers_x_request_id": custom_resp.headers.get("x-request-id"),
-            "body_request_id": custom_resp.json().get("request_id"),
-        }
-
     evidence = {
         "endpoint": "/predict (smoke API)",
         "health": health_body,
         "predictions": predict_records,
         "empty_text_request": empty_record,
-        "custom_request_id": custom_record,
     }
     EVIDENCE_FILE.write_text(json.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")
     print(f"health: {health_body}")

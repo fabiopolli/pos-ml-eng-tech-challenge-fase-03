@@ -1,111 +1,93 @@
-"""Smoke FastAPI app exposing ``/health`` and ``/predict``.
-
-This is **not** the production API. It is intentionally minimal: it
-loads the serialized artifact, applies the contract defined in
-``docs/plans/PLAN-text-classifier.md`` and exposes the latency, the
-``request_id`` and the ``Server-Timing`` header that the future
-observability work will rely on.
-
-Romário will replace or extend this app during Etapa 3 of the
-checklist; the request/response schema here is the proposal that needs
-his validation.
-"""
+"""Local smoke API for a validated baseline model artifact."""
 
 from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-import joblib
-import pandas as pd
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from triage_ml.api.schemas import ErrorOut, HealthOut, PredictIn, PredictOut
-from triage_ml.models.artifact import ArtifactIntegrityError, verify_artifact_integrity
+from triage_ml.models.artifact import load_artifact
 
 logger = logging.getLogger("triage_ml.api")
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_PATH = REPO_ROOT / "models" / "v1"
-DEFAULT_LABELS_CSV = REPO_ROOT / "data" / "medical_tc_labels.csv"
+VERSION_DIR_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}$")
 
 
-def _env_path(name: str, default: Path) -> Path:
-    value = os.environ.get(name)
-    return Path(value) if value else default
+def _default_model_path() -> Path:
+    models_dir = REPO_ROOT / "models"
+    versioned = (
+        sorted(
+            (
+                path / "model.joblib"
+                for path in models_dir.iterdir()
+                if path.is_dir() and VERSION_DIR_PATTERN.fullmatch(path.name)
+            ),
+            reverse=True,
+        )
+        if models_dir.exists()
+        else []
+    )
+    if versioned:
+        return versioned[0]
+    return models_dir / "v1" / "model.joblib"
 
 
 class ModelHolder:
-    """Lazy model loader. Keeps the cold-start cost out of import time."""
+    """Load and publish a model only after full artifact validation."""
 
-    def __init__(self, model_dir: Path, labels_csv: Path) -> None:
-        self.model_dir = model_dir
-        self.labels_csv = labels_csv
+    def __init__(self, model_path: str | Path) -> None:
+        self.model_path = Path(model_path)
         self.pipeline: Any = None
         self.metadata: dict[str, Any] = {}
-        self.classes: list[int] = []
         self.label_names: dict[int, str] = {}
         self.model_version: str | None = None
-        self.error: str | None = None
 
     def load(self) -> None:
-        joblib_path = self.model_dir / "model.joblib"
-        metadata_path = self.model_dir / "metadata.json"
-        classes_path = self.model_dir / "classes.json"
-        if not (joblib_path.exists() and metadata_path.exists()):
-            self.error = f"model artifact not found under {self.model_dir}"
-            logger.warning(self.error)
-            return
+        self.pipeline = None
+        self.metadata = {}
+        self.label_names = {}
+        self.model_version = None
         try:
-            self.pipeline = joblib.load(joblib_path)
-            self.metadata = _read_json(metadata_path)
-            # Integrity check: refuse to serve a model whose checksum does not
-            # match its recorded metadata. This protects against silent model
-            # swap and against loading a metadata written for a different file.
-            verify_artifact_integrity(joblib_path=joblib_path, metadata=self.metadata)
-            self.classes = (
-                _read_json(classes_path) if classes_path.exists() else list(self.pipeline.classes_)
-            )
-            self.model_version = str(self.metadata.get("model_version", "unknown"))
-            self.label_names = _load_label_names(self.labels_csv)
-        except ArtifactIntegrityError as exc:
-            self.error = f"artifact integrity check failed: {exc}"
-            logger.error(self.error)
-            self.pipeline = None
-        except Exception as exc:  # pragma: no cover - defensive
-            self.error = f"failed to load model: {exc}"
-            logger.exception("model load failed")
-            self.pipeline = None
+            pipeline, metadata = load_artifact(self.model_path)
+        except Exception as exc:
+            logger.error("model startup validation failed")
+            raise RuntimeError("model artifact is missing or incompatible") from exc
+        self.metadata = metadata
+        self.label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
+        self.model_version = metadata["model_version"]
+        self.pipeline = pipeline
 
     @property
     def loaded(self) -> bool:
         return self.pipeline is not None
 
 
-def _read_json(path: Path) -> Any:
-    import json
+def _request_id() -> str:
+    """Generate an internal ID so client-controlled content never reaches logs."""
 
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _load_label_names(path: Path) -> dict[int, str]:
-    if not path.exists():
-        return {}
-    df = pd.read_csv(path)
-    return {int(row["condition_label"]): str(row["condition_name"]) for _, row in df.iterrows()}
+    return uuid.uuid4().hex[:12]
 
 
-def _build_app() -> FastAPI:
-    model_dir = _env_path("MODEL_DIR", DEFAULT_MODEL_PATH)
-    labels_csv = _env_path("LABELS_CSV", DEFAULT_LABELS_CSV)
-    holder = ModelHolder(model_dir, labels_csv)
+def create_app(
+    *,
+    model_path: str | Path | None = None,
+    holder: ModelHolder | None = None,
+) -> FastAPI:
+    """Create the app with an injectable holder for hermetic tests."""
+
+    if holder is None:
+        configured_path = model_path or os.environ.get("MODEL_PATH") or _default_model_path()
+        holder = ModelHolder(configured_path)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -116,43 +98,54 @@ def _build_app() -> FastAPI:
     app.state.holder = holder
 
     @app.middleware("http")
-    async def add_request_id(request: Request, call_next):
-        request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
-        request.state.request_id = request_id
+    async def request_context(request: Request, call_next):
+        request.state.request_id = _request_id()
+        request.state.started_at = time.perf_counter()
         response = await call_next(request)
-        response.headers["X-Request-ID"] = request_id
+        response.headers["X-Request-ID"] = request.state.request_id
+        latency_ms = getattr(request.state, "predict_latency_ms", None)
+        if latency_ms is not None:
+            response.headers["Server-Timing"] = f"predict;dur={latency_ms:.3f}"
         return response
 
     @app.exception_handler(RequestValidationError)
-    async def request_validation_handler(request: Request, exc: RequestValidationError):
+    async def request_validation_handler(request: Request, _: RequestValidationError):
         request_id = getattr(request.state, "request_id", None)
         body = ErrorOut(
             request_id=request_id,
             error_code="validation_failed",
             message="Request body is invalid.",
         ).model_dump()
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=body,
-            headers={"X-Request-ID": request_id or ""},
-        )
+        return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content=body)
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         request_id = getattr(request.state, "request_id", None)
-        error_code = (
-            "validation_failed"
-            if exc.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-            else "request_failed"
-        )
+        allowed_codes = {"validation_failed", "prediction_failed", "model_not_ready"}
+        error_code = exc.detail if exc.detail in allowed_codes else "request_failed"
         body = ErrorOut(
             request_id=request_id,
             error_code=error_code,
             message="Request could not be processed.",
         ).model_dump()
-        return JSONResponse(
-            status_code=exc.status_code, content=body, headers={"X-Request-ID": request_id or ""}
+        return JSONResponse(status_code=exc.status_code, content=body)
+
+    @app.exception_handler(Exception)
+    async def unexpected_exception_handler(request: Request, _: Exception):
+        request_id = getattr(request.state, "request_id", None)
+        latency_ms = (time.perf_counter() - request.state.started_at) * 1000.0
+        logger.error(
+            "request failed (rid=%s route=%s status=500 latency_ms=%.3f)",
+            request_id,
+            request.url.path,
+            latency_ms,
         )
+        body = ErrorOut(
+            request_id=request_id,
+            error_code="internal_error",
+            message="Request could not be processed.",
+        ).model_dump()
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content=body)
 
     @app.get("/health", response_model=HealthOut)
     async def health() -> HealthOut:
@@ -166,50 +159,47 @@ def _build_app() -> FastAPI:
     async def predict(payload: PredictIn, request: Request) -> PredictOut:
         request_id: str = request.state.request_id
         if not holder.loaded:
-            logger.warning("/predict called before model was ready (rid=%s)", request_id)
             raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="model not ready"
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="model_not_ready",
             )
 
-        text = payload.text.strip()
-        # Reject blank text *before* invoking the pipeline. Some vectorizers
-        # raise on empty vocabulary (or accept the empty string silently and
-        # produce undefined probabilities); the contract requires a hard 422.
+        text = payload.text
         if not text:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="text must contain at least one non-whitespace character",
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="validation_failed",
             )
-
         warnings: list[str] = []
-        if payload.text != text:
-            warnings.append("leading_or_trailing_whitespace_stripped")
 
         started = time.perf_counter()
         try:
             label = int(holder.pipeline.predict([text])[0])
+            score: float | None = None
+            if hasattr(holder.pipeline, "predict_proba"):
+                proba = holder.pipeline.predict_proba([text])[0]
+                index = list(holder.pipeline.classes_).index(label)
+                score = float(proba[index])
         except Exception as exc:
-            logger.exception("/predict inference failed (rid=%s)", request_id)
+            request.state.predict_latency_ms = (time.perf_counter() - started) * 1000.0
+            logger.error(
+                "prediction failed (rid=%s route=/predict status=500 latency_ms=%.3f)",
+                request_id,
+                request.state.predict_latency_ms,
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="prediction_failed",
             ) from exc
-        score: float | None = None
-        if hasattr(holder.pipeline, "predict_proba"):
-            try:
-                proba = holder.pipeline.predict_proba([text])[0]
-                idx = list(holder.pipeline.classes_).index(label)
-                score = float(proba[idx])
-            except Exception:
-                score = None
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        label_name = holder.label_names.get(label, "unknown")
+        else:
+            request.state.predict_latency_ms = (time.perf_counter() - started) * 1000.0
+
         return PredictOut(
             label=label,
-            label_name=label_name,
+            label_name=holder.label_names[label],
             score=score,
             model_version=holder.model_version or "unknown",
-            latency_ms=elapsed_ms,
+            latency_ms=request.state.predict_latency_ms,
             request_id=request_id,
             warnings=warnings,
         )
@@ -217,4 +207,4 @@ def _build_app() -> FastAPI:
     return app
 
 
-app = _build_app()
+app = create_app()
