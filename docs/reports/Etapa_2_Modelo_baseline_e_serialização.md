@@ -326,7 +326,7 @@ docs/
 ├── CHECKLIST.md                                      (marcador oficial da Etapa 2)
 ├── plans/PLAN-text-classifier.md                    (plano detalhado Fase 1 + Fase 2)
 ├── dataset.md                                        (decisão de dataset e licença)
-└── reports/IMPLEMENTATION-REPORT-FASE-1.md          (este documento)
+└── reports/Etapa_2_Modelo_baseline_e_serialização.md          (este documento)
 
 models/
 └── 20260823T135811Z-bed2194376bc/

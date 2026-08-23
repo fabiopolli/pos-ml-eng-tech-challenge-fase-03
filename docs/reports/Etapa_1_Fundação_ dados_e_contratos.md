@@ -7,7 +7,7 @@
 | Período desta entrega | Foundation commits `587807a`, `6202e26`, `05384d4` (anterior a esta sessão) |
 | Status atual (2026-08-23) | ✅ Etapa 1 concluída no repositório, contrato de dados consumido pela Etapa 2 |
 
-Este relatório registra o que está implementado e versionado em `main` para a Etapa 1 do checklist, mesmo que tenha sido entregue em sessões anteriores à atual. O objetivo é padronizar a documentação por integrante, no mesmo formato de [`IMPLEMENTATION-REPORT-FASE-1.md`](./IMPLEMENTATION-REPORT-FASE-1.md), e servir como referência única para a banca.
+Este relatório registra o que está implementado e versionado em `main` para a Etapa 1 do checklist, mesmo que tenha sido entregue em sessões anteriores à atual. O objetivo é padronizar a documentação por integrante, no mesmo formato de [`Etapa_2_Modelo_baseline_e_serialização.md`](./Etapa_2_Modelo_baseline_e_serialização.md), e servir como referência única para a banca.
 
 ## 1. Resumo executivo
 
@@ -206,7 +206,7 @@ docs/
 ├── CHECKLIST.md                                        (marcador oficial da Etapa 1)
 ├── dataset.md                                          (decisão do dataset, licença e comparação)
 ├── papers/                                             (paper de referência)
-└── reports/IMPLEMENTATION-REPORT-FASE-1-DATASET.md    (este documento)
+└── reports/Etapa_1_Fundação_ dados_e_contratos.md    (este documento)
 
 notebooks/
 └── 01_eda.ipynb                                        (EDA, 20 células, 9 figuras)
