@@ -164,6 +164,8 @@ PYTHONPATH=src uv run python -m triage_ml.models.train \
   --classifier logreg
 ```
 
+O treino grava em `models/YYYYMMDDTHHMMSSZ-<12hex>/model.joblib` + `classes.json` + `metadata.json` (validado por `schema_version: 1`). Cada versão é imutável: para trocar de versão sem reiniciar a API de desenvolvimento, use `POST /reload` ou o picker do dashboard.
+
 Hiperparâmetros editáveis em `configs/training.yaml`.
 
 ### Como rodar a API de desenvolvimento
@@ -233,7 +235,7 @@ O dashboard **não** persiste payloads nem textos; latência, taxa de erro e vol
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 50 testes do baseline, artefato, treino, API, idioma e dashboard
+uv run pytest             # 66 testes do baseline, artefato, treino, API, idioma e dashboard
 uv run ruff check .       # lint
 uv run ruff format .      # format
 ```

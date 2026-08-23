@@ -2,7 +2,7 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-08-23 — reordenação das etapas para refletir a dependência real entre dados, modelo, API, otimização e observabilidade.
+Última atualização: 2026-08-23 — revisão de Fase 1 com model picker (`/models` + `/reload`), seção "🔁 Trocar modelo" no dashboard e remoção dos "Atalhos" da sidebar.
 
 ## Visão geral e responsáveis
 
@@ -28,6 +28,8 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 > Atualização 2026-08-23 (`GET /model-info`): a API de desenvolvimento passou a expor `GET /model-info` retornando o manifesto validado do artefato (`metadata.json` validado por `validate_metadata`). O contrato é descrito por `ModelInfoOut` em `src/triage_ml/dev_api/schemas.py` e inclui model_version/model_name/task_type/language/classes/label_mapping/random_state/n_train/n_test/metrics/preprocessing/selection/dependency_versions/git_commit/git_dirty/created_at. Quando o artefato não está carregado, retorna `503 model_not_ready`.
 >
 > Atualização 2026-08-23 (`GET /models` + `POST /reload`): o model picker do dashboard agora é end-to-end. `GET /models` lista as versões imutáveis disponíveis em `models/` (newest-first) + a atualmente em uso; `POST /reload {"model_version": "..."}` troca o holder da API após re-validar manifesto + checksum (`ReloadIn`/`ReloadOut` em `src/triage_ml/dev_api/schemas.py`, `ModelHolder.reload_to` em `src/triage_ml/dev_api/app.py`). Erros: `404 model_not_found` para versão inexistente e `500 model_incompatible` para falha de validação; o holder anterior permanece em uso. `ModelHolder.reload_to` é unitário (não toca o filesystem do chamador) e o dashboard guarda o estado só em memória — não há persistência entre sessões Streamlit.
+>
+> Atualização 2026-08-23 (limpeza da sidebar): a seção "📚 Atalhos" e as constantes `DOC_PLAN`/`DOC_CHECKLIST`/`DOC_REPORT_FASE_1` foram removidas do `front/app_dev.py`. O acesso ao Plan/Checklist/Relatório continua via Git/GitHub, e o teste `test_documentation_shortcuts_point_to_existing_files` foi excluído.
 
 ## Requisitos transversais
 
@@ -86,7 +88,7 @@ Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerent
 - [x] Checagem de idioma na `/predict` via `langid` (allow-list `{"en"}`, rejeitando texto curto, score baixo e idioma não suportado, com `detected_language`/`detected_language_score` no body de erro).
 - [x] Dashboard de desenvolvimento `front/app_dev.py` (Streamlit) para exercitar `/health`, `/model-info`, `/models`, `/reload` e `/predict` manualmente, com cenários canônicos da política de idioma e model picker na sidebar.
 
-**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7460`, `balanced_accuracy=0.7221`, `macro_f1=0.7296`, `weighted_f1=0.7438`. Seleção: LinearSVC `0.7335` contra LR `0.7319` em macro-F1 CV. Resumo local em `models/20260823T134214Z-bed2194376bc/summary.json`; evidência versionável em `reports/evidence/api-dev.json`.
+**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7460`, `balanced_accuracy=0.7221`, `macro_f1=0.7296`, `weighted_f1=0.7438`. Seleção: LinearSVC `0.7335` contra LR `0.7319` em macro-F1 CV. Resumo local em `models/20260823T134214Z-bed2194376bc/summary.json`; evidência versionável em `reports/evidence/api-dev.json` (inclui `models`, `reload_success` e `reload_not_found` do model picker).
 
 Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, otimização bem-sucedida e melhoria demonstrada. A otimização em si entra na Etapa 5.
 

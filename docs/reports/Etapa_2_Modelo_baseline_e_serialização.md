@@ -5,7 +5,7 @@
 | Integrante | Will (Bill) |
 | Etapa do checklist | Etapa 2 (baseline) — `docs/CHECKLIST.md` reordenado em 2026-08-23 |
 | Período desta entrega | 2026-08-23 (uma única sessão de trabalho) |
-| Última revisão | commit `d1cbe3f` em `origin/main` + checagem de idioma na `/predict` + dashboard de desenvolvimento |
+| Última revisão | commit `002f648` em `origin/main` (remoção dos "Atalhos" da sidebar) — chain inclui endpoints `/models` + `/reload`, model picker no dashboard e helpers `_list_models`/`_reload_model` |
 | Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Fase 2 |
 
 Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma **API de desenvolvimento** (`src/triage_ml/dev_api/`) que outros integrantes (Romário, Denis, Fábio) possam consumir para validar localmente. A API de desenvolvimento **consome o modelo real treinado** — não é um stub. A API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará este contrato. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
@@ -277,7 +277,7 @@ Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/
   - **Métricas** — quatro `st.metric` (accuracy / balanced_accuracy / macro_f1 / weighted_f1) e tabela per-classe (`precision`, `recall`, `f1`, `support`).
   - **Classes & mapeamento** — lista de classes e tabela com `label` ↔ `name`.
 
-O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos. Validação manual local usando os próprios helpers contra a API rodando em `127.0.0.1:8765`:
+O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos — o estado do model picker vive só em `st.session_state` e some quando o Streamlit reinicia. Helpers HTTP (`_check_health`, `_post_predict`, `_get_model_info`, `_list_models`, `_reload_model`, `_request_json`) são cobertos por testes herméticos em `tests/test_dev_dashboard_helpers.py` que mockam `requests.request` e `streamlit.*` (não precisam da API rodando). Validação manual local usando os próprios helpers contra a API rodando em `127.0.0.1:8765`:
 
 ```text
 HEALTH 200 {'status': 'ok', 'model_version': '20260823T135811Z-bed2194376bc', 'model_loaded': True}

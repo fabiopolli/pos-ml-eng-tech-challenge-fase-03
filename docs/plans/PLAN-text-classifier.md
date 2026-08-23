@@ -31,6 +31,7 @@ A versão anterior deste arquivo cobria apenas a Fase 1 e tratava otimização/o
 - **Riscos revisitados** incluindo os da Fase 2 (dependência ONNX, custo de manter Compose local).
 - **Sequência de commits estendida** para incluir as entregas da Fase 2.
 - **Revisão técnica de 2026-08-23**: solver multiclasses corrigido, seleção sem uso indevido do teste, contrato de artefato detalhado, testes automatizados da API, benchmark isolado do CI comum e Compose comparativo com duas variantes.
+- **Revisão de 2026-08-23 (model picker)**: novos endpoints `GET /models` e `POST /reload` na API de desenvolvimento (`src/triage_ml/dev_api/app.py`) com `ModelHolder.reload_to` re-validando manifesto + checksum antes do swap. Seção "🔁 Trocar modelo" na sidebar do dashboard consome ambos. Removida a seção "📚 Atalhos" da sidebar e as constantes `DOC_*` correspondentes.
 
 ---
 
@@ -198,7 +199,7 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 - Atualizar `docs/CHECKLIST.md`: Etapa 2 → `[~]` em progresso, depois `[x]` com evidência. Não tocar em itens de outros donos.
 - Adicionar seção "Modelo (Bill)" no `README.md` resumindo tarefa real (categorias clínicas), abordagem, classes e como rodar treino + API local; incluir a justificativa formal de não-uso de Random Forest.
 - Atualizar `.agents/contracts/README.md` se o formato de `metadata.json` divergir.
-- Documentar a checagem de idioma (`langid`): nova subseção no README + entrada no `IMPLEMENTATION-REPORT-FASE-1.md` + linha de evolução no CHECKLIST; atualizar o plano (este arquivo) com a camada de contrato e os arquivos novos.
+- Documentar a checagem de idioma (`langid`): nova subseção no README + entrada no `docs/reports/Etapa_2_Modelo_baseline_e_serialização.md` + linha de evolução no CHECKLIST; atualizar o plano (este arquivo) com a camada de contrato e os arquivos novos.
 - Documentar o dashboard de desenvolvimento (`front/app_dev.py`): subseção no README, README próprio em `front/README.md`, evolução no CHECKLIST; deixar claro que **não substitui Prometheus/Grafana**.
 
 ## F1. Critérios de aceite
@@ -237,10 +238,11 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 ## F1. Definição de pronto da Fase 1
 
 - Itens da Etapa 2 marcados com evidência no checklist.
-- `uv run pytest` e `uv run ruff check .` verdes.
-- API sobe com `uvicorn triage_ml.dev_api.app:app` e responde `/health` e `/predict` com o artefato.
+- `uv run pytest` e `uv run ruff check .` verdes (66 testes ao final da revisão de 2026-08-23 — model picker + sidebar limpa).
+- API sobe com `uvicorn triage_ml.dev_api.app:app` e responde `/health`, `/model-info`, `/models`, `/reload` e `/predict` com o artefato.
+- Dashboard sobe com `streamlit run front/app_dev.py`, lista as versões de `models/`, permite trocar o holder via `POST /reload` e renderiza o manifesto carregado em `🧠 Modelo`.
 - Treino reproduzível a partir de clone limpo, dado o CSV local versionado e o `data/medical_tc_labels.csv` (mapeamento `condition_label → condition_name`).
-- `README.md` e `CHECKLIST.md` refletem o estado real.
+- `README.md`, `front/README.md`, `CHECKLIST.md` e `docs/reports/Etapa_2_Modelo_baseline_e_serialização.md` refletem o estado real (model picker + remoção dos Atalhos da sidebar).
 
 ---
 
