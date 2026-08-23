@@ -15,6 +15,8 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from triage_ml.api.config import get_api_config
+from triage_ml.api.language import UnsupportedLanguageError, detect_language
 from triage_ml.api.schemas import ErrorOut, HealthOut, PredictIn, PredictOut
 from triage_ml.models.artifact import load_artifact
 
@@ -103,9 +105,15 @@ def create_app(
         request.state.started_at = time.perf_counter()
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
-        latency_ms = getattr(request.state, "predict_latency_ms", None)
-        if latency_ms is not None:
-            response.headers["Server-Timing"] = f"predict;dur={latency_ms:.3f}"
+        detect_ms = getattr(request.state, "detect_latency_ms", None)
+        predict_ms = getattr(request.state, "predict_latency_ms", None)
+        timing_parts: list[str] = []
+        if detect_ms is not None:
+            timing_parts.append(f"detect;dur={detect_ms:.3f}")
+        if predict_ms is not None:
+            timing_parts.append(f"predict;dur={predict_ms:.3f}")
+        if timing_parts:
+            response.headers["Server-Timing"] = ", ".join(timing_parts)
         return response
 
     @app.exception_handler(RequestValidationError)
@@ -121,12 +129,33 @@ def create_app(
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         request_id = getattr(request.state, "request_id", None)
-        allowed_codes = {"validation_failed", "prediction_failed", "model_not_ready"}
+        language_codes = {
+            "unsupported_language",
+            "text_too_short_for_language_check",
+            "indeterminate_language",
+        }
+        allowed_codes = {
+            "validation_failed",
+            "prediction_failed",
+            "model_not_ready",
+        } | language_codes
         error_code = exc.detail if exc.detail in allowed_codes else "request_failed"
+        message = "Request could not be processed."
+        if error_code in language_codes:
+            message = "Only English texts are supported."
+        detected_language: str | None = None
+        detected_language_score: float | None = None
+        # Attach the detector's verdict when the route populated it.
+        last_check = getattr(request.state, "last_language_check", None)
+        if last_check is not None:
+            detected_language = last_check.code
+            detected_language_score = last_check.score
         body = ErrorOut(
             request_id=request_id,
             error_code=error_code,
-            message="Request could not be processed.",
+            message=message,
+            detected_language=detected_language,
+            detected_language_score=detected_language_score,
         ).model_dump()
         return JSONResponse(status_code=exc.status_code, content=body)
 
@@ -170,6 +199,34 @@ def create_app(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="validation_failed",
             )
+
+        api_config = get_api_config()
+        detect_started = time.perf_counter()
+        try:
+            detect_language(
+                text,
+                min_chars=api_config.min_text_chars_for_language_check,
+                min_score=api_config.min_language_score,
+                supported=api_config.supported_languages,
+            )
+        except UnsupportedLanguageError as exc:
+            detect_latency_ms = (time.perf_counter() - detect_started) * 1000.0
+            request.state.detect_latency_ms = detect_latency_ms
+            request.state.last_language_check = exc
+            logger.info(
+                "language check rejected (rid=%s reason=%s code=%s score=%s detect_ms=%.3f)",
+                request_id,
+                exc.reason,
+                exc.code,
+                exc.score,
+                detect_latency_ms,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=exc.reason,
+            ) from exc
+        else:
+            request.state.detect_latency_ms = (time.perf_counter() - detect_started) * 1000.0
         warnings: list[str] = []
 
         started = time.perf_counter()

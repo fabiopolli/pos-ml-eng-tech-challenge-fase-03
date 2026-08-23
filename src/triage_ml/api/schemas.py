@@ -46,3 +46,5 @@ class ErrorOut(BaseModel):
     request_id: str | None = None
     error_code: str
     message: str
+    detected_language: str | None = None
+    detected_language_score: float | None = None

@@ -11,64 +11,104 @@
       "label_name": "neoplasms",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 7.078753000314464,
-      "request_id": "4b65737f9a15",
+      "latency_ms": 8.42415099759819,
+      "request_id": "35a15b4826f5",
       "warnings": [],
-      "headers_x_request_id": "4b65737f9a15",
-      "header_server_timing": "predict;dur=7.079"
+      "headers_x_request_id": "35a15b4826f5",
+      "header_server_timing": "detect;dur=879.441, predict;dur=8.424"
     },
     {
       "label": 4,
       "label_name": "cardiovascular diseases",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.6645920002483763,
-      "request_id": "33b81c7af921",
+      "latency_ms": 0.8043679990805686,
+      "request_id": "dc5d88103256",
       "warnings": [],
-      "headers_x_request_id": "33b81c7af921",
-      "header_server_timing": "predict;dur=0.665"
+      "headers_x_request_id": "dc5d88103256",
+      "header_server_timing": "detect;dur=0.574, predict;dur=0.804"
     },
     {
       "label": 1,
       "label_name": "neoplasms",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.5776950001745718,
-      "request_id": "42f6475b1ea6",
+      "latency_ms": 0.7320400000025984,
+      "request_id": "be79bc88d304",
       "warnings": [],
-      "headers_x_request_id": "42f6475b1ea6",
-      "header_server_timing": "predict;dur=0.578"
+      "headers_x_request_id": "be79bc88d304",
+      "header_server_timing": "detect;dur=0.482, predict;dur=0.732"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.5212280011619441,
-      "request_id": "0c6a3ad06d1c",
+      "latency_ms": 0.6569059987668879,
+      "request_id": "7e1b76895c17",
       "warnings": [],
-      "headers_x_request_id": "0c6a3ad06d1c",
-      "header_server_timing": "predict;dur=0.521"
+      "headers_x_request_id": "7e1b76895c17",
+      "header_server_timing": "detect;dur=0.458, predict;dur=0.657"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.5174899997655302,
-      "request_id": "5eb5a07ae151",
+      "latency_ms": 0.6987560009292793,
+      "request_id": "b9d4f0650f56",
       "warnings": [],
-      "headers_x_request_id": "5eb5a07ae151",
-      "header_server_timing": "predict;dur=0.517"
+      "headers_x_request_id": "b9d4f0650f56",
+      "header_server_timing": "detect;dur=0.902, predict;dur=0.699"
+    }
+  ],
+  "language_checks": [
+    {
+      "scenario": "short_text",
+      "status_code": 422,
+      "body": {
+        "request_id": "8961ce9ac28e",
+        "error_code": "text_too_short_for_language_check",
+        "message": "Only English texts are supported.",
+        "detected_language": null,
+        "detected_language_score": null
+      },
+      "header_server_timing": "detect;dur=0.007"
+    },
+    {
+      "scenario": "indeterminate_language",
+      "status_code": 422,
+      "body": {
+        "request_id": "5d3cd2997d52",
+        "error_code": "indeterminate_language",
+        "message": "Only English texts are supported.",
+        "detected_language": "en",
+        "detected_language_score": 0.0
+      },
+      "header_server_timing": "detect;dur=0.042"
+    },
+    {
+      "scenario": "unsupported_language",
+      "status_code": 422,
+      "body": {
+        "request_id": "f61cb9bb3b9c",
+        "error_code": "unsupported_language",
+        "message": "Only English texts are supported.",
+        "detected_language": "pt",
+        "detected_language_score": 0.9048374180359595
+      },
+      "header_server_timing": "detect;dur=0.021"
     }
   ],
   "empty_text_request": {
     "status_code": 422,
     "body": {
-      "request_id": "19ce21d73bfc",
+      "request_id": "6629c262b1a4",
       "error_code": "validation_failed",
-      "message": "Request body is invalid."
+      "message": "Request body is invalid.",
+      "detected_language": null,
+      "detected_language_score": null
     },
-    "headers_x_request_id": "19ce21d73bfc"
+    "headers_x_request_id": "6629c262b1a4"
   }
 }

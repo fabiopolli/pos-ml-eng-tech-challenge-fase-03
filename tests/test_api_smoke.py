@@ -130,7 +130,15 @@ def test_health_returns_validated_model_metadata(client: TestClient) -> None:
 
 
 def test_predict_uses_manifest_mapping_and_emits_timing(client: TestClient) -> None:
-    response = client.post("/predict", json={"text": "liver tumor neoplasm"})
+    response = client.post(
+        "/predict",
+        json={
+            "text": (
+                "We report a 62-year-old patient with an aggressive liver tumor that "
+                "required urgent surgical resection and histopathological evaluation."
+            )
+        },
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["label_name"] in {
@@ -142,8 +150,11 @@ def test_predict_uses_manifest_mapping_and_emits_timing(client: TestClient) -> N
     }
     assert body["score"] is None or 0.0 <= body["score"] <= 1.0
     assert body["latency_ms"] >= 0
-    assert response.headers["server-timing"].startswith("predict;dur=")
-    header_ms = float(response.headers["server-timing"].split("=")[1])
+    timing = response.headers["server-timing"]
+    assert "detect;dur=" in timing
+    assert "predict;dur=" in timing
+    predict_part = next(p for p in timing.split(", ") if p.startswith("predict;dur="))
+    header_ms = float(predict_part.split("=")[1])
     assert header_ms == pytest.approx(body["latency_ms"], abs=0.001)
     assert response.headers["x-request-id"] == body["request_id"]
 
@@ -175,7 +186,14 @@ def test_invalid_text_returns_sanitized_422(client: TestClient, payload: dict[st
 
 
 def test_padding_is_stripped_by_request_schema(client: TestClient) -> None:
-    response = client.post("/predict", json={"text": "   liver tumor   "})
+    response = client.post(
+        "/predict",
+        json={
+            "text": "   "
+            "We report a 62-year-old patient with an aggressive liver tumor requiring "
+            "urgent surgical resection and histopathological evaluation.   "
+        },
+    )
     assert response.status_code == 200
     assert response.json()["warnings"] == []
 
@@ -193,12 +211,22 @@ def test_prediction_failure_is_sanitized_and_does_not_log_text(
 
     holder.pipeline = FailingPipeline()
     with caplog.at_level("ERROR", logger="triage_ml.api"):
-        response = client.post("/predict", json={"text": sentinel})
+        response = client.post(
+            "/predict",
+            json={
+                "text": (
+                    f"{sentinel} - we report a 62-year-old patient presenting with chest "
+                    "pain and ST-segment elevation requiring urgent cardiac catheterization."
+                )
+            },
+        )
     assert response.status_code == 500
     assert response.json()["error_code"] == "prediction_failed"
     assert sentinel not in response.text
     assert sentinel not in caplog.text
-    assert response.headers["server-timing"].startswith("predict;dur=")
+    timing = response.headers["server-timing"]
+    assert "detect;dur=" in timing
+    assert "predict;dur=" in timing
 
 
 def test_invalid_artifact_fails_during_startup(tmp_path: Path) -> None:

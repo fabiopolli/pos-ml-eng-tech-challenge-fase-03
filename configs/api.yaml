@@ -1,0 +1,19 @@
+api:
+  # ISO 639-1 codes the API will accept. Anything outside this set
+  # produces a 422 with error_code="unsupported_language".
+  supported_languages:
+    - en
+
+  # Minimum number of characters in `text` for a stable detection.
+  # Inputs shorter than this produce 422 with
+  # error_code="text_too_short_for_language_check".
+  min_text_chars_for_language_check: 20
+
+  # Lower bound for the detector confidence score (normalised to
+  # [0, 1] via exp(langid_log_prob)). Detections below this value
+  # are treated as indeterminate and rejected with
+  # error_code="indeterminate_language". Defaults to 0.0 because
+  # langid's raw scores are per-token log probabilities and almost
+  # never reach 0.85; the value is intended as an opt-in guardrail
+  # for environments that want a strict confidence filter.
+  min_language_score: 0.0

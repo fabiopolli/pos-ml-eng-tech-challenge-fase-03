@@ -62,7 +62,7 @@ sem duplicatas exatas ou leakage entre treino e teste. A decisão, a licença e 
 de preparação estão em [docs/dataset.md](docs/dataset.md). Dados brutos, processados e
 artefatos binários não devem ser enviados ao Git.
 
-Como os candidatos estão em inglês, a recomendação inicial é manter a inferência sem tradução online. Se entradas em português forem necessárias, a primeira alternativa será tradução offline, versionada e avaliada como parte da preparação dos dados. Isso evita adicionar custo, indisponibilidade, riscos de privacidade e latência ao caminho crítico da API.
+Como os candidatos estão em inglês, a recomendação inicial é manter a inferência sem tradução online. Para não correr riscos de LGPD ou de latência em dados clínicos sensíveis, a API ganhou uma **checagem de idioma local** com `langid` que rejeita preventivamente qualquer texto fora do allow-list `{"en"}` antes do modelo ser invocado. Mais detalhes na seção "Modelo (Bill)".
 
 ## Estrutura do repositório
 
@@ -180,17 +180,29 @@ PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
 Endpoints:
 
 - `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`. Se o artefato estiver ausente ou inválido, a aplicação **não sobe** (RuntimeError no startup).
-- `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message)` com HTTP 422 e nunca vazam o texto clínico.
-- Toda resposta de predição traz `X-Request-ID` (gerado internamente) e `Server-Timing: predict;dur=<latency_ms>`, prontos para a Etapa 6 (Prometheus/Grafana).
+- `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` com HTTP 422 e nunca vazam o texto clínico.
+- Toda resposta de predição traz `X-Request-ID` (gerado internamente) e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo), prontos para a Etapa 6 (Prometheus/Grafana).
 
 Variável de ambiente: `MODEL_PATH`, apontando para o `model.joblib` versionado. Sem ela, a smoke local usa o artefato timestampado mais recente em `models/`; a aplicação falha rapidamente se o artefato estiver ausente ou incompatível. Os nomes das classes vêm somente do `metadata.json`.
+
+#### Política de idioma (`langid` local)
+
+Antes de chamar o pipeline, a `/predict` aplica uma política de idioma em três camadas configuradas por `configs/api.yaml`:
+
+| Camada | Configuração | Comportamento quando falha |
+|---|---|---|
+| Comprimento mínimo | `api.min_text_chars_for_language_check` (default `20`) | `error_code=text_too_short_for_language_check` |
+| Confiança mínima | `api.min_language_score` (default `0.0`, opt-in) | `error_code=indeterminate_language` |
+| Allow-list de idiomas | `api.supported_languages` (default `["en"]`) | `error_code=unsupported_language` |
+
+O detector é `langid`, roda 100% local, sem rede. O score é normalizado de log-prob (`langid` retorna `log_prob ≤ 0`) para `[0, 1]` com saturação em `[-500, 0]`. O corpo do erro carrega `detected_language` e `detected_language_score` quando disponíveis, mas **nunca** o `text`.
 
 A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já expõe `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` para acelerar a integração.
 
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 34 testes do baseline, artefato, treino e API
+uv run pytest             # 44 testes do baseline, artefato, treino, API e idioma
 uv run ruff check .       # lint
 uv run ruff format .      # format
 ```

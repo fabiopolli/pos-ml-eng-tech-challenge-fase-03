@@ -12,11 +12,15 @@ that no clinical text ever appears in version control.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from triage_ml.api.app import app
+from triage_ml.api import app as app_module
+from triage_ml.api import config as api_config
+from triage_ml.api import language as api_language
 
 EVIDENCE_DIR = Path(__file__).resolve().parents[1] / "reports" / "evidence"
 EVIDENCE_FILE = EVIDENCE_DIR / "api-smoke.json"
@@ -30,16 +34,98 @@ FIXTURES = [
     "Pneumonia in a 70 year old patient with fever.",
 ]
 
+# Sentinels used to force language-detection verdicts on specific inputs.
+# Text bodies are kept generic — they exist only to drive the policy.
+LANG_FIXTURES = {
+    "short_text": "liver tumor",
+    "indeterminate_text": (
+        "The study cohort included patients with mixed-language clinical notes that the "
+        "detector could not classify reliably."
+    ),
+    "unsupported_text": (
+        "Relatamos um paciente de 62 anos com infarto agudo do miocárdio após dor torácica "
+        "e dispneia progressiva, submetido a angiocoronariografia que confirmou oclusão arterial."
+    ),
+}
+
+
+@contextmanager
+def _strict_lang_config():
+    """Temporarily raise ``min_language_score`` so the indeterminate branch triggers."""
+
+    original = app_module.get_api_config
+    api_config.reset_api_config_cache()
+    app_module.get_api_config = lambda: api_config.ApiConfig(
+        supported_languages={"en"},
+        min_text_chars_for_language_check=20,
+        min_language_score=0.5,
+    )
+    try:
+        yield
+    finally:
+        app_module.get_api_config = original
+        api_config.reset_api_config_cache()
+
+
+def _run_language_checks(client: TestClient) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+
+    short_resp = client.post("/predict", json={"text": LANG_FIXTURES["short_text"]})
+    records.append(
+        {
+            "scenario": "short_text",
+            "status_code": short_resp.status_code,
+            "body": short_resp.json(),
+            "header_server_timing": short_resp.headers.get("server-timing"),
+        }
+    )
+
+    # ``-1000`` saturates the normaliser to 0.0, which is below the
+    # 0.5 threshold patched in by ``_strict_lang_config``.
+    with patch.object(api_language.langid, "classify", return_value=("en", -1000.0)):
+        indeterminate_resp = client.post(
+            "/predict", json={"text": LANG_FIXTURES["indeterminate_text"]}
+        )
+    records.append(
+        {
+            "scenario": "indeterminate_language",
+            "status_code": indeterminate_resp.status_code,
+            "body": indeterminate_resp.json(),
+            "header_server_timing": indeterminate_resp.headers.get("server-timing"),
+        }
+    )
+
+    # ``-0.1`` normalises to ``exp(-0.1) ≈ 0.905``, which clears the strict
+    # ``min_score = 0.5`` gate. The detector still classifies the text as
+    # Portuguese — outside the ``{"en"}`` allow-list — so the policy must
+    # raise ``unsupported_language``.
+    with patch.object(api_language.langid, "classify", return_value=("pt", -0.1)):
+        unsupported_resp = client.post("/predict", json={"text": LANG_FIXTURES["unsupported_text"]})
+    records.append(
+        {
+            "scenario": "unsupported_language",
+            "status_code": unsupported_resp.status_code,
+            "body": unsupported_resp.json(),
+            "header_server_timing": unsupported_resp.headers.get("server-timing"),
+        }
+    )
+
+    return records
+
 
 def main() -> int:
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    client = TestClient(app)
-    with client:
+
+    # Plain-mode run: ``min_language_score = 0.0`` (default) so the real
+    # langid detector accepts all five English fixtures.
+    api_config.reset_api_config_cache()
+    with TestClient(app_module.app) as client:
         health_resp = client.get("/health")
         health_resp.raise_for_status()
         health_body = health_resp.json()
         if not health_body.get("model_loaded"):
             raise RuntimeError("smoke API did not load the model")
+
         predict_records: list[dict[str, object]] = []
         for text in FIXTURES:
             resp = client.post("/predict", json={"text": text})
@@ -58,6 +144,7 @@ def main() -> int:
                     "header_server_timing": resp.headers.get("server-timing"),
                 }
             )
+
         empty_resp = client.post("/predict", json={"text": ""})
         if empty_resp.status_code != 422:
             raise RuntimeError(f"empty text returned HTTP {empty_resp.status_code}, expected 422")
@@ -66,10 +153,19 @@ def main() -> int:
             "body": empty_resp.json(),
             "headers_x_request_id": empty_resp.headers.get("x-request-id"),
         }
+
+    # Strict-mode run: the actual langid scores for natural English
+    # text are very low (per-token log probabilities), so we only raise
+    # the bar inside the language-check section, where the detector is
+    # mocked to a saturating -1000 log-prob.
+    with _strict_lang_config(), TestClient(app_module.app) as strict_client:
+        language_records = _run_language_checks(strict_client)
+
     evidence = {
         "endpoint": "/predict (smoke API)",
         "health": health_body,
         "predictions": predict_records,
+        "language_checks": language_records,
         "empty_text_request": empty_record,
     }
     EVIDENCE_FILE.write_text(json.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")

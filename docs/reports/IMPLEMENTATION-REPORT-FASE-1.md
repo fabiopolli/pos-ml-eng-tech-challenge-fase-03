@@ -5,7 +5,7 @@
 | Integrante | Will (Bill) |
 | Etapa do checklist | Etapa 2 (baseline) — `docs/CHECKLIST.md` reordenado em 2026-08-23 |
 | Período desta entrega | 2026-08-23 (uma única sessão de trabalho) |
-| Última revisão | commit `d1cbe3f` em `origin/main` |
+| Última revisão | commit `d1cbe3f` em `origin/main` + checagem de idioma na `/predict` |
 | Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Fase 2 |
 
 Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma API de smoke que outros integrantes (Romário, Denis, Fábio) possam consumir sem stubs. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
@@ -16,7 +16,7 @@ Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — F
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
 - API de smoke FastAPI expõe `GET /health` e `POST /predict` com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana).
-- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino e contrato HTTP da API: **34 testes verdes** em `uv run pytest`.
+- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API e política de idioma: **44 testes verdes** em `uv run pytest`.
 - Lint e formatação verdes (`ruff check .` / `ruff format .`).
 
 ## 2. Escopo e alinhamento com o plano
@@ -198,16 +198,39 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
 - **Headers em toda resposta**: `X-Request-ID` (gerado internamente — o cliente nunca controla o valor) e `Server-Timing: predict;dur=<latency_ms>` quando `latency_ms` foi medido.
 - **Modelo carregado**: via `MODEL_PATH` (env) ou autodetecção da versão mais recente `YYYYMMDDTHHMMSSZ-*` em `models/`. Sem artefato, falha imediatamente.
 
+### 5.1 Checagem de idioma (`langid` local)
+
+A `/predict` rejeita preventivamente qualquer texto que não esteja no allow-list `{"en"}` antes de invocar o pipeline. A política vive em `configs/api.yaml` e é carregada por `triage_ml.api.config.get_api_config()` (LRU cache).
+
+```yaml
+api:
+  supported_languages:
+    - en
+  min_text_chars_for_language_check: 20
+  min_language_score: 0.0
+```
+
+`detect_language` em `triage_ml/api/language.py` aplica a política em três camadas:
+
+1. **Comprimento mínimo** (`min_text_chars_for_language_check = 20`). Textos mais curtos são rejeitados com `error_code=text_too_short_for_language_check` (status 422) sem chamar o detector — `langid` é instável abaixo desse limite.
+2. **Confiança mínima** (`min_language_score = 0.0` por default, opt-in para endurecer). `langid.classify` retorna `(iso_code, log_prob)` com `log_prob ≤ 0`; o normalizador `_normalise_score` aplica `math.exp` com saturação em `[-500, 0]`. Detecções abaixo do limiar viram `error_code=indeterminate_language`.
+3. **Allow-list de idiomas**. Códigos fora de `{"en"}` viram `error_code=unsupported_language`.
+
+`ErrorOut` ganhou dois campos opcionais — `detected_language` e `detected_language_score` — para que o cliente saiba por que o pedido foi rejeitado sem expor o `text`. O corpo nunca carrega o `text` original; o `Server-Timing` agora reporta `detect;dur=<ms>, predict;dur=<ms>` quando ambos os estágios rodam, ou apenas `detect;dur=<ms>` quando o detector interrompe o fluxo.
+
 ### 5.2 Evidência do smoke
 
-Execução de `python scripts/smoke_api.py` produziu o relatório sanitizado `reports/evidence/api-smoke.json` com cinco predições, um teste de validação 422 e um teste com request_id custom. Saída resumida do último run:
+Execução de `python scripts/smoke_api.py` produziu o relatório sanitizado `reports/evidence/api-smoke.json` com cinco predições, três cenários de política de idioma e um teste de validação 422. Saída resumida do último run:
 
-| Caso | HTTP | `label` | `latency_ms` | Notas |
+| Caso | HTTP | `label` / `error_code` | `latency_ms` | Notas |
 |---|---|---|---|---|
 | Texto real (`"Tumor growth in the liver..."`) | 200 | `1` (neoplasms) | ~7 ms (cold) / < 2 ms (warm) | OK |
 | Texto cardiovascular | 200 | `4` (cardiovascular) | < 2 ms | OK |
-| Texto só com whitespace | 422 | — | — | `error_code=validation_failed`, sem vazamento |
-| Campo `text` ausente | 422 | — | — | `error_code=validation_failed`, `request_id` propagado |
+| Texto só com whitespace | 422 | `validation_failed` | — | sem vazamento |
+| Campo `text` ausente | 422 | `validation_failed` | — | `request_id` propagado |
+| Texto curto (`"liver tumor"`, 11 chars) | 422 | `text_too_short_for_language_check` | — | rejeitado antes do detector |
+| Mock `("en", -1000.0)` (score saturado em 0.0) | 422 | `indeterminate_language` | — | abaixo de `min_score=0.5` |
+| Mock `("pt", -0.1)` (score ≈ 0.905) | 422 | `unsupported_language` | — | acima do limiar mas fora do allow-list |
 
 ## 6. Testes automatizados
 
@@ -219,11 +242,12 @@ Cobertura por arquivo:
 | `tests/test_model_artifact.py` | 12 | `ArtifactPaths`, `file_sha256`, `write_classes` (com `_coerce` de `numpy.int64`), `read_classes`, `validate_metadata` (campos obrigatórios), `verify_artifact_integrity` (caso feliz, model swap, checksum ausente), `load_artifact` |
 | `tests/test_model_training.py` | 1 | Integração `run_training + load_artifact` em dataset sintético, garantindo `selection.candidates = {logreg, linear_svc}`, `test_set_used_for_selection=False`, balanced_accuracy presente, `pipeline.classes_ == metadata.classes` |
 | `tests/test_api_smoke.py` | 12 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado |
+| `tests/test_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
 
 Comando único:
 
 ```bash
-uv run pytest   # 34 passed in ~2s
+uv run pytest   # 44 passed in ~3s
 uv run ruff check .
 uv run ruff format .
 ```
@@ -283,7 +307,7 @@ reports/
 └── evidence/api-smoke.json
 
 src/triage_ml/
-├── api/{app.py, schemas.py}                         (FastAPI smoke)
+├── api/{app.py, schemas.py, language.py, config.py}  (FastAPI smoke + checagem de idioma)
 ├── models/{artifact.py, pipeline.py, train.py}      (treino + contrato do artefato)
 ├── data/{prepare.py}                                (dedup, sem leakage)
 └── monitoring/                                       (reservado para Fase 2)
@@ -292,9 +316,12 @@ tests/
 ├── test_model_pipeline.py
 ├── test_model_artifact.py
 ├── test_model_training.py
-└── test_api_smoke.py
+├── test_api_smoke.py
+└── test_api_language.py
 
-configs/training.yaml                                 (hiperparâmetros + label_mapping)
+configs/
+├── training.yaml                                    (hiperparâmetros + label_mapping)
+└── api.yaml                                          (allow-list de idiomas + thresholds)
 ```
 
 ## 10. Conclusão

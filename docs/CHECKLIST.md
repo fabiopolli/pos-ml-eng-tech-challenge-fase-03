@@ -20,6 +20,8 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 > Mudança 2026-08-23: o item "Classificador de texto" agora descreve apenas o baseline. A otimização do modelo aparece dentro de "Otimização de latência e observabilidade", alinhada à Etapa 5 do novo plano. Mantemos dois itens no checklist por refletir a divisão de pesos da banca.
 >
 > Atualização 2026-08-23 (revisão de Fase 1): a Etapa 2 foi endurecida com `metadata.schema_version`, versionamento imutável `YYYYMMDDTHHMMSSZ-<input_hash>`, validação de manifesto + checksum antes da desserialização e seleção entre LogisticRegression/LinearSVC por validação cruzada estratificada de 5 folds somente no treino. LinearSVC foi o vencedor (`0.7335` vs `0.7319` mean macro-F1). Artefatos em `models/v1/` legados não passam mais na validação — cada novo treino cria uma versão imutável.
+>
+> Atualização 2026-08-23 (idioma da API): a `/predict` ganhou checagem de idioma com `langid` rodando localmente. Textos com menos de 20 caracteres são rejeitados como `text_too_short_for_language_check`; detecções com confiança baixa ou idioma fora do allow-list `{"en"}` são rejeitadas como `indeterminate_language` ou `unsupported_language`. A política vive em `configs/api.yaml`; o body de erro carrega `detected_language` e `detected_language_score`, mas nunca o `text`.
 
 ## Requisitos transversais
 
@@ -75,6 +77,7 @@ Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerent
 - [x] Métricas por classe e agregadas, com figuras em `reports/figures/08_confusion_matrix_linear_svc.png` e `08_top_features_linear_svc.png`.
 - [x] Modelo e manifesto canônico serializados em diretório imutável, com schema/classes/mapping/checksum validados antes da desserialização.
 - [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] Checagem de idioma na `/predict` via `langid` (allow-list `{"en"}`, rejeitando texto curto, score baixo e idioma não suportado, com `detected_language`/`detected_language_score` no body de erro).
 
 **Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7460`, `balanced_accuracy=0.7221`, `macro_f1=0.7296`, `weighted_f1=0.7438`. Seleção: LinearSVC `0.7335` contra LR `0.7319` em macro-F1 CV. Resumo local em `models/20260823T134214Z-bed2194376bc/summary.json`; smoke versionável em `reports/evidence/api-smoke.json`.
 
@@ -179,10 +182,10 @@ Aceite oficial (15%): demonstração técnica clara, impacto explicado e duraç�
 
 ## Tradução
 
-- [x] Não inserir tradução online no caminho crítico da fundação.
-- [ ] Após escolha do dataset, confirmar se o produto precisa receber português.
-- [ ] Se necessário, avaliar tradução offline, versionada e mensurada.
-- [ ] Documentar efeitos em qualidade, privacidade, custo e latência.
+- [x] Não inserir tradução online no caminho crítico da fundação (decisão por LGPD/latência).
+- [x] Confirmar que o produto final recebe apenas inglês (modelo treinado em abstracts em inglês).
+- [x] Checagem de idioma local via `langid` na `/predict`, rejeitando texto fora do allow-list `{"en"}` — sem tradução automática, sem chamada externa.
+- [ ] Se necessário no futuro, avaliar tradução offline, versionada e mensurada e revisar impactos em qualidade, privacidade, custo e latência.
 
 ## Regra de atualização
 
