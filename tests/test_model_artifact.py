@@ -115,3 +115,39 @@ def test_validate_metadata_accepts_complete_metadata(tmp_path: Path) -> None:
     metadata = {key: "placeholder" for key in REQUIRED_METADATA_KEYS}
     metadata["checksum_sha256"] = file_sha256(paths.joblib)
     validate_metadata(metadata)  # should not raise
+
+
+def test_verify_artifact_integrity_passes(tmp_path: Path) -> None:
+    from triage_ml.models.artifact import verify_artifact_integrity
+
+    paths = ArtifactPaths.for_version(tmp_path, "v1")
+    paths.ensure()
+    paths.joblib.write_bytes(b"joblib-binary-blob")
+    metadata = {key: "x" for key in REQUIRED_METADATA_KEYS}
+    metadata["checksum_sha256"] = file_sha256(paths.joblib)
+    verify_artifact_integrity(joblib_path=paths.joblib, metadata=metadata)
+
+
+def test_verify_artifact_integrity_detects_swap(tmp_path: Path) -> None:
+    from triage_ml.models.artifact import ArtifactIntegrityError, verify_artifact_integrity
+
+    paths = ArtifactPaths.for_version(tmp_path, "v1")
+    paths.ensure()
+    paths.joblib.write_bytes(b"original")
+    metadata = {key: "x" for key in REQUIRED_METADATA_KEYS}
+    metadata["checksum_sha256"] = file_sha256(paths.joblib)
+    # Silent model swap: overwrite the joblib after metadata was written.
+    paths.joblib.write_bytes(b"replaced-by-an-attacker")
+    with pytest.raises(ArtifactIntegrityError, match="checksum mismatch"):
+        verify_artifact_integrity(joblib_path=paths.joblib, metadata=metadata)
+
+
+def test_verify_artifact_integrity_requires_checksum(tmp_path: Path) -> None:
+    from triage_ml.models.artifact import ArtifactIntegrityError, verify_artifact_integrity
+
+    paths = ArtifactPaths.for_version(tmp_path, "v1")
+    paths.ensure()
+    paths.joblib.write_bytes(b"x")
+    metadata = {"model_version": "v1"}
+    with pytest.raises(ArtifactIntegrityError, match="missing checksum"):
+        verify_artifact_integrity(joblib_path=paths.joblib, metadata=metadata)

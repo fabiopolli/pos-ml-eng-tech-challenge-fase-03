@@ -152,3 +152,25 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
     missing = [key for key in REQUIRED_METADATA_KEYS if key not in metadata]
     if missing:
         raise ValueError(f"metadata.json is missing required keys: {missing}")
+
+
+class ArtifactIntegrityError(RuntimeError):
+    """Raised when a serialized artifact's checksum does not match its metadata."""
+
+
+def verify_artifact_integrity(*, joblib_path: Path, metadata: dict[str, Any]) -> None:
+    """Confirm ``metadata["checksum_sha256"]`` matches the on-disk joblib file.
+
+    Loading proceeds only when the digest matches. This guards against silent
+    model swap attacks and against loading a model whose metadata was written
+    for a different artifact.
+    """
+
+    expected = metadata.get("checksum_sha256")
+    if not expected:
+        raise ArtifactIntegrityError("metadata.json is missing checksum_sha256")
+    actual = file_sha256(joblib_path)
+    if actual != expected:
+        raise ArtifactIntegrityError(
+            f"checksum mismatch for {joblib_path}: expected {expected}, got {actual}"
+        )
