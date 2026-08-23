@@ -43,7 +43,7 @@ Entregar:
 1. Classificador NLP leve (TF-IDF + classificador linear Scikit-Learn) treinado no recorte preparado pela fundação (5.000 amostras, seed 42).
 2. Artefato serializado segundo o contrato (`models/<versão>/model.joblib` + `metadata.json`), com classes e nomes no próprio manifesto.
 3. Métricas por classe e agregadas, com figuras em `reports/figures/`.
-4. API FastAPI de desenvolvimento (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com `latency_ms` e `request_id` já expostos para reuso na Fase 2.
+4. API FastAPI de desenvolvimento (`/health` + `/model-info` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com `latency_ms` e `request_id` já expostos para reuso na Fase 2.
 
 A API oficial é do Romário (Etapa 3). Esta API de desenvolvimento é substituída ou estendida por ele; o contrato (esquemas Pydantic, headers) é ponto de alinhamento obrigatório antes de qualquer promoção.
 
@@ -95,7 +95,7 @@ configs/
 ├── training.yaml              # hiperparâmetros e label mapping versionados
 └── api.yaml                   # allow-list de idiomas + thresholds da política de idioma
 front/
-├── app_dev.py                 # dashboard Streamlit para exercitar /health e /predict
+├── app_dev.py                 # dashboard Streamlit para exercitar /health, /model-info e /predict
 └── README.md                  # instruções de uso e escopo do dashboard
 ```
 
@@ -112,6 +112,7 @@ Pontos relevantes de `.agents/contracts/README.md`:
 - **Versão**: `<versão>` segue `YYYYMMDDTHHMMSSZ-<input_hash_curto>`, com hash derivado do dataset preparado e da configuração, e nunca sobrescreve um diretório existente. O carregador aceita apenas artefatos locais/confiáveis e valida schema, classes e checksum antes de desserializar o `joblib`.
 - **API (proposta, sujeito à validação de Romário antes de promover)**:
   - `GET /health` → `HealthOut(status, model_version, model_loaded)`.
+  - `GET /model-info` → `ModelInfoOut(...)` com o manifesto validado do artefato (503 `model_not_ready` se nada estiver carregado).
   - `POST /predict` → `PredictIn(text)` → `PredictOut(label, label_name, score?, model_version, latency_ms, request_id, warnings)`, com score opcional para classificadores sem `predict_proba`.
   - **Política de idioma** (camada adicional, fora do contrato inicial da Fase 1 mas incorporada em 2026-08-23): `langid` local roda antes do pipeline. Configuração em `configs/api.yaml` (`supported_languages`, `min_text_chars_for_language_check`, `min_language_score`). Rejeições viram `ErrorOut(request_id, error_code="text_too_short_for_language_check"|"indeterminate_language"|"unsupported_language", message, detected_language?, detected_language_score?)` — o `text` nunca aparece na resposta nem em logs.
   - Erros: `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` — nunca conteúdo clínico. Um handler próprio sanitiza o `422` do FastAPI/Pydantic, removendo o campo `input` antes da resposta.
@@ -159,9 +160,11 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
   - `PredictIn(text: constr(strip_whitespace=True, min_length=1, max_length=20000))`.
   - `PredictOut(label, label_name, score: float | None, model_version, latency_ms, request_id, warnings)`.
   - `HealthOut(status, model_version, model_loaded)`.
+  - `ModelInfoOut(model_version, model_name, task_type, language, classes, label_mapping, random_state, n_train, n_test, metrics, preprocessing, selection, dependency_versions, git_commit, git_dirty, created_at)`.
   - `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)`.
 - `src/triage_ml/dev_api/app.py`:
   - `GET /health` → `HealthOut`.
+  - `GET /model-info` → `ModelInfoOut` (503 `model_not_ready` se o artefato não estiver carregado). Permite que ferramentas externas (dashboard, smoke, monitoramento) inspecionem o manifesto sem tocar o filesystem.
   - `POST /predict` → `PredictIn` → `PredictOut` (com checagem de idioma antes do pipeline).
   - Camada de idioma: `detect_language(text, ...)` aplicado após validação de schema. Falhas viram `UnsupportedLanguageError`, mapeadas para `error_code` apropriado.
 - App factory com injeção do carregador nos testes; carregamento no startup via `lifespan`, com falha rápida para artefato ausente/incompatível e `MODEL_PATH` configurável por env var.
@@ -173,8 +176,8 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
   - Ecoa `request_id` em `X-Request-ID`.
   - Emite `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` se a checagem de idioma interrompeu o fluxo).
   - Captura exceções inesperadas, preserva erros HTTP conhecidos e retorna `ErrorOut` com `error_code` genérico; loga apenas `request_id`, rota, status e latência (nunca `text` nem corpo da requisição).
-- `uvicorn triage_ml.dev_api.app:app --reload` deve subir e responder nos dois endpoints.
-- `tests/test_dev_api.py` cobre `/health`, `/predict`, artefato inválido, texto vazio, sanitização de erro, `X-Request-ID`, `Server-Timing` e ausência do texto em logs/respostas de erro.
+- `uvicorn triage_ml.dev_api.app:app --reload` deve subir e responder nos três endpoints.
+- `tests/test_dev_api.py` cobre `/health`, `/predict`, `/model-info`, artefato inválido, texto vazio, sanitização de erro, `X-Request-ID`, `Server-Timing` e ausência do texto em logs/respostas de erro.
 - `tests/test_dev_api_language.py` cobre cada branch da política (`text_too_short_for_language_check`, `indeterminate_language`, `unsupported_language`), valida os campos `detected_language`/`detected_language_score` e confirma que o `text` nunca vaza.
 
 ### F1.T5. Teste manual e evidências
@@ -200,7 +203,7 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 - [x] Seeds, preprocessing, fingerprints e versões fixas.
 - [x] Métricas por classe e agregadas, com figuras em `reports/figures/`.
 - [x] Modelo e metadados serializados segundo contrato e validados por checksum.
-- [x] API de desenvolvimento local (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] API de desenvolvimento local (`/health` + `/model-info` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers.
 
 ## F1. Riscos específicos
 

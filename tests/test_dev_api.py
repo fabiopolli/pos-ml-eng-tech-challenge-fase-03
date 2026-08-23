@@ -235,3 +235,51 @@ def test_invalid_artifact_fails_during_startup(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="missing or incompatible"):
         with TestClient(create_app(model_path=model_path)):
             pass
+
+
+def test_model_info_returns_validated_manifest(client: TestClient) -> None:
+    response = client.get("/model-info")
+    assert response.status_code == 200
+    body = response.json()
+    # Top-level identity fields surfaced from metadata.json.
+    assert body["model_version"] == VERSION
+    assert body["model_name"] == "tiny"
+    assert body["task_type"] == "multiclass_text_classification"
+    assert body["language"] == "en"
+    assert body["classes"] == [1, 2, 3, 4, 5]
+    assert body["label_mapping"]["1"] == "neoplasms"
+    assert body["n_train"] == 10
+    assert body["n_test"] == 5
+    # Metrics block is preserved (global + per_class).
+    assert body["metrics"]["macro_f1"] == 1.0
+    assert set(body["metrics"]["per_class"]) == {"1", "2", "3", "4", "5"}
+    # Selection block keeps the candidates used for the comparison.
+    assert body["selection"]["selected_classifier"] == "logreg"
+    assert set(body["selection"]["candidates"]) == {"logreg", "linear_svc"}
+    # Provenance and dependencies survive the round-trip.
+    assert body["git_commit"] == "0" * 40
+    assert body["git_dirty"] is False
+    assert body["dependency_versions"]["python"] == "3.12"
+    assert "created_at" in body
+
+
+def test_model_info_returns_503_when_artifact_missing(tmp_path: Path) -> None:
+    """The endpoint must refuse to lie about a model that is not loaded."""
+
+    # Build a holder pointing at a real artifact (so ``load()`` would
+    # succeed), then neutralize ``load()`` and clear the populated state.
+    # ``lifespan`` calls ``holder.load()`` on startup, so we have to
+    # prevent it from repopulating the fields we just zeroed.
+    holder = ModelHolder(_artifact(tmp_path))
+    holder.load = lambda: None  # type: ignore[method-assign]
+    holder.pipeline = None
+    holder.metadata = {}
+    holder.label_names = {}
+    holder.model_version = None
+    with TestClient(create_app(holder=holder)) as test_client:
+        response = test_client.get("/model-info")
+    assert response.status_code == 503
+    body = response.json()
+    assert body["error_code"] == "model_not_ready"
+    assert body["request_id"]
+    assert "could not be processed" in body["message"].lower()

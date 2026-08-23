@@ -29,7 +29,7 @@ from fastapi.responses import JSONResponse
 
 from triage_ml.dev_api.config import get_api_config
 from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
-from triage_ml.dev_api.schemas import ErrorOut, HealthOut, PredictIn, PredictOut
+from triage_ml.dev_api.schemas import ErrorOut, HealthOut, ModelInfoOut, PredictIn, PredictOut
 from triage_ml.models.artifact import load_artifact
 
 logger = logging.getLogger("triage_ml.dev_api")
@@ -195,6 +195,24 @@ def create_app(
             model_version=holder.model_version,
             model_loaded=holder.loaded,
         )
+
+    @app.get("/model-info", response_model=ModelInfoOut)
+    async def model_info() -> ModelInfoOut:
+        """Expose the validated artifact manifest.
+
+        The endpoint serves the same ``metadata.json`` content the API
+        loaded at startup. Callers can inspect metrics, training split
+        sizes, classifier selection details and dependency versions
+        without having to read the filesystem directly. Returns
+        ``503 model_not_ready`` when the model is not loaded.
+        """
+
+        if not holder.loaded:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="model_not_ready",
+            )
+        return ModelInfoOut(**holder.metadata)
 
     @app.post("/predict", response_model=PredictOut)
     async def predict(payload: PredictIn, request: Request) -> PredictOut:

@@ -60,6 +60,22 @@ class _FakeResponse:
         return self._body
 
 
+class _EnterableMock(MagicMock):
+    """MagicMock that is also a no-op context manager.
+
+    Streamlit's ``st.expander(...)`` returns a container that supports
+    both attribute access (for streamlit writes) and the context-manager
+    protocol. Returning ``self`` from ``__enter__`` keeps ``with`` blocks
+    alive so the wrapped body actually executes.
+    """
+
+    def __enter__(self) -> _EnterableMock:
+        return self
+
+    def __exit__(self, *exc_info: object) -> bool:
+        return False
+
+
 def test_health_calls_endpoint_and_parses_response(dashboard_module):
     response = _FakeResponse(
         status_code=200,
@@ -185,3 +201,157 @@ def test_repo_root_is_above_dashboard(dashboard_module):
     # ``<root>/front/app_dev.py`` and ``REPO_ROOT`` should match.
     expected_root = Path(__file__).resolve().parents[1]
     assert dashboard_module.REPO_ROOT.resolve() == expected_root.resolve()
+
+
+# ---------------------------------------------------------------------------
+# ``/model-info`` sidebar
+# ---------------------------------------------------------------------------
+
+
+def test_get_model_info_hits_endpoint(dashboard_module):
+    response = _FakeResponse(
+        status_code=200,
+        body={
+            "model_version": "20260823T135811Z-bed2194376bc",
+            "model_name": "tfidf_linear_svc_baseline",
+            "task_type": "multiclass_text_classification",
+            "language": "en",
+            "classes": [1, 2, 3],
+            "label_mapping": {"1": "neoplasms", "2": "digestive", "3": "cardiovascular"},
+            "random_state": 42,
+            "n_train": 14438,
+            "n_test": 3610,
+            "metrics": {},
+            "preprocessing": {},
+            "selection": {},
+            "dependency_versions": {"python": "3.12"},
+            "git_commit": "0123456789abcdef0123456789abcdef01234567",
+            "git_dirty": False,
+            "created_at": "2026-08-23T13:58:11+00:00",
+        },
+    )
+    with patch.object(dashboard_module.requests, "request", return_value=response) as mocked:
+        result = dashboard_module._get_model_info("http://api.example.com/")
+    method = mocked.call_args.kwargs.get("method") or mocked.call_args.args[0]
+    url = mocked.call_args.kwargs.get("url") or mocked.call_args.args[1]
+    assert method == "GET"
+    assert url == "http://api.example.com/model-info"
+    assert result.status_code == 200
+    assert result.body["model_version"].startswith("2026")
+
+
+def test_format_pct_rounds_to_two_decimals(dashboard_module):
+    assert dashboard_module._format_pct(0.87654) == "87.65%"
+    assert dashboard_module._format_pct(0) == "0.00%"
+    assert dashboard_module._format_pct(1) == "100.00%"
+    assert dashboard_module._format_pct(None) == "—"
+
+
+def test_render_model_sidebar_invokes_all_panels(dashboard_module):
+    """Every section of the sidebar renderer must be exercised without error."""
+
+    info = {
+        "model_version": "20260823T135811Z-bed2194376bc",
+        "model_name": "tfidf_linear_svc_baseline",
+        "task_type": "multiclass_text_classification",
+        "language": "en",
+        "classes": [1, 2],
+        "label_mapping": {"1": "neoplasms", "2": "digestive"},
+        "random_state": 42,
+        "n_train": 14438,
+        "n_test": 3610,
+        "metrics": {
+            "accuracy": 0.91,
+            "balanced_accuracy": 0.88,
+            "macro_f1": 0.87,
+            "weighted_f1": 0.9,
+            "per_class": {
+                "1": {"precision": 0.9, "recall": 0.91, "f1": 0.9, "support": 100},
+                "2": {"precision": 0.85, "recall": 0.83, "f1": 0.84, "support": 80},
+            },
+        },
+        "selection": {
+            "selected_classifier": "linear_svc",
+            "metric": "macro_f1",
+            "folds": 5,
+            "test_set_used_for_selection": False,
+            "candidates": {
+                "logreg": {"mean_macro_f1": 0.83, "std_macro_f1": 0.01},
+                "linear_svc": {"mean_macro_f1": 0.86, "std_macro_f1": 0.02},
+            },
+        },
+        "dependency_versions": {
+            "python": "3.12",
+            "numpy": "1.26",
+            "scipy": "1.11",
+            "scikit_learn": "1.4",
+            "joblib": "1.3",
+        },
+        "preprocessing": {"classifier": "linear_svc"},
+        "git_commit": "0123456789abcdef0123456789abcdef01234567",
+        "git_dirty": True,
+        "created_at": "2026-08-23T13:58:11+00:00",
+    }
+    calls = {"metric": 0, "markdown": 0, "json": 0, "dataframe": 0, "columns": 0}
+
+    import streamlit as real_st
+
+    def _columns(spec, **kwargs):
+        calls["columns"] += 1
+        width = spec if isinstance(spec, int) else len(spec)
+        cols = [MagicMock(name=f"col_{i}") for i in range(width)]
+        for col in cols:
+            # Route column-level metric/markdown/json calls to the patched module
+            # so we can count them through the same ``calls`` dict.
+            col.metric = MagicMock(side_effect=lambda *a, **k: _bump("metric"))
+            col.markdown = MagicMock(side_effect=lambda *a, **k: _bump("markdown"))
+            col.dataframe = MagicMock(side_effect=lambda *a, **k: _bump("dataframe"))
+        return cols
+
+    def _bump(key: str) -> None:
+        calls[key] = calls[key] + 1
+
+    mocks = {
+        "metric": MagicMock(side_effect=lambda *args, **kwargs: _bump("metric")),
+        "columns": MagicMock(side_effect=_columns),
+        "markdown": MagicMock(side_effect=lambda *args, **kwargs: _bump("markdown")),
+        "json": MagicMock(side_effect=lambda *args, **kwargs: _bump("json")),
+        "dataframe": MagicMock(side_effect=lambda *args, **kwargs: _bump("dataframe")),
+        "caption": MagicMock(),
+        "info": MagicMock(),
+        "expander": MagicMock(return_value=_EnterableMock()),
+    }
+    with patch.multiple(real_st, **mocks):
+        dashboard_module._render_model_sidebar(info)
+
+    # Five expanders (Identidade, Treinamento, Seleção, Métricas, Classes).
+    assert mocks["expander"].call_count == 5
+    # Two ``st.metric`` calls in Treinamento + four in Métricas — six total.
+    assert calls["metric"] == 6
+    # Two dataframes (per-class metrics, label mapping).
+    assert calls["dataframe"] == 2
+    # JSON block for dependency_versions.
+    assert calls["json"] == 1
+
+
+def test_render_model_sidebar_handles_empty_metrics(dashboard_module):
+    """An empty manifest must not crash — fallbacks surface ``—``."""
+
+    import streamlit as real_st
+
+    mocks = {
+        "metric": MagicMock(),
+        "columns": MagicMock(return_value=[MagicMock(), MagicMock()]),
+        "markdown": MagicMock(),
+        "json": MagicMock(),
+        "dataframe": MagicMock(),
+        "caption": MagicMock(),
+        "expander": MagicMock(return_value=_EnterableMock()),
+    }
+    with patch.multiple(real_st, **mocks):
+        dashboard_module._render_model_sidebar({})  # type: ignore[arg-type]
+
+    # Five sections rendered even with an empty payload.
+    assert mocks["expander"].call_count == 5
+    # No dataframe when there's no per_class / label_mapping to show.
+    assert mocks["dataframe"].call_count == 0

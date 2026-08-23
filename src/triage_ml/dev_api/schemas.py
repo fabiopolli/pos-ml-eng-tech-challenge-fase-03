@@ -8,7 +8,7 @@ API.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
@@ -30,6 +30,39 @@ class HealthOut(BaseModel):
     status: Literal["ok", "degraded"]
     model_version: str | None = None
     model_loaded: bool
+
+
+class ModelInfoOut(BaseModel):
+    """Snapshot of the validated artifact manifest.
+
+    Returned by ``GET /model-info`` so that callers (dashboard, smoke
+    script, monitoring) can inspect what the API is currently serving
+    without having to read the filesystem directly. The shape mirrors
+    the canonical ``metadata.json`` schema, restricted to the keys the
+    manifest contract requires (see
+    ``src/triage_ml/models/artifact.py::REQUIRED_METADATA_KEYS``).
+
+    The nested dicts (``metrics``, ``preprocessing``, ``selection``)
+    are typed permissively because their inner shape is already
+    enforced by ``validate_metadata`` when the artifact was loaded.
+    """
+
+    model_version: str
+    model_name: str
+    task_type: str
+    language: str
+    classes: list[int]
+    label_mapping: dict[str, str]
+    random_state: int
+    n_train: int
+    n_test: int
+    metrics: dict[str, Any]
+    preprocessing: dict[str, Any]
+    selection: dict[str, Any]
+    dependency_versions: dict[str, str]
+    git_commit: str
+    git_dirty: bool
+    created_at: str
 
 
 class PredictOut(BaseModel):

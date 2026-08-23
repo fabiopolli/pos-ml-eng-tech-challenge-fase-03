@@ -126,6 +126,10 @@ def main() -> int:
         if not health_body.get("model_loaded"):
             raise RuntimeError("dev API did not load the model")
 
+        model_info_resp = client.get("/model-info")
+        model_info_resp.raise_for_status()
+        model_info_body = model_info_resp.json()
+
         predict_records: list[dict[str, object]] = []
         for text in FIXTURES:
             resp = client.post("/predict", json={"text": text})
@@ -164,6 +168,25 @@ def main() -> int:
     evidence = {
         "endpoint": "/predict (dev API)",
         "health": health_body,
+        "model_info_summary": {
+            "model_version": model_info_body.get("model_version"),
+            "model_name": model_info_body.get("model_name"),
+            "task_type": model_info_body.get("task_type"),
+            "language": model_info_body.get("language"),
+            "n_train": model_info_body.get("n_train"),
+            "n_test": model_info_body.get("n_test"),
+            "selected_classifier": model_info_body.get("selection", {}).get("selected_classifier"),
+            "metric": model_info_body.get("selection", {}).get("metric"),
+            "metrics": {
+                "accuracy": model_info_body.get("metrics", {}).get("accuracy"),
+                "balanced_accuracy": model_info_body.get("metrics", {}).get("balanced_accuracy"),
+                "macro_f1": model_info_body.get("metrics", {}).get("macro_f1"),
+                "weighted_f1": model_info_body.get("metrics", {}).get("weighted_f1"),
+            },
+            "git_commit": model_info_body.get("git_commit"),
+            "git_dirty": model_info_body.get("git_dirty"),
+            "created_at": model_info_body.get("created_at"),
+        },
         "predictions": predict_records,
         "language_checks": language_records,
         "empty_text_request": empty_record,

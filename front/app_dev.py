@@ -1,12 +1,13 @@
 """Streamlit dev dashboard for the triage_ml FastAPI service.
 
-The dashboard is a developer-facing tool for exercising the ``/health``
-and ``/predict`` endpoints against any reachable instance of the API
-(local, container, or cloud). It is **not** an observability surface
-— latency, error rate and request volume belong to Prometheus/Grafana
-(see ``monitoring/``). It does not render model metrics either: the
-classifier is fixed and the dataset evaluation is captured by the
-notebooks and the implementation report.
+The dashboard is a developer-facing tool for exercising the ``/health``,
+``/model-info`` and ``/predict`` endpoints against any reachable
+instance of the API (local, container, or cloud). It is **not** an
+observability surface — latency, error rate and request volume belong
+to Prometheus/Grafana (see ``monitoring/``). It does, however, render
+the validated artifact manifest in the sidebar so developers can see at
+a glance which model is being served, how it was selected and how it
+performed on the held-out test split.
 
 Abas:
   1. **Health & versão** — chama ``GET /health`` e mostra ``status``,
@@ -18,6 +19,12 @@ Abas:
   3. **Política de idioma** — quatro cenários canônicos (texto curto,
      score baixo, idioma fora do allow-list, sucesso em inglês) com
      presets prontos para colar payloads e validar a resposta de erro.
+
+Sidebar:
+  * **Conexão** — URL base da API + botão para revalidar ``/health``.
+  * **Modelo** — bloco que consome ``GET /model-info`` e mostra
+    identidade, métricas de treino, seleção do classificador, métricas
+    globais/per-classe e mapeamento de labels.
 
 A comunicação é puramente HTTP contra a URL configurada na sidebar.
 O dashboard nunca toca o artefato do modelo nem o detector ``langid``
@@ -36,7 +43,7 @@ import requests
 import streamlit as st
 
 # --- Constantes visuais (dark mode premium, identidade da Fase 02) ---
-PAGE_TITLE = "triage_ml — Smoke API"
+PAGE_TITLE = "triage_ml — Dev API"
 PAGE_ICON = "🧪"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 10.0
@@ -157,6 +164,18 @@ def _post_predict(api_url: str, text: str) -> ApiResponse:
     )
 
 
+def _get_model_info(api_url: str) -> ApiResponse:
+    """Return ``GET /model-info`` against the configured API.
+
+    The endpoint exposes the validated artifact manifest so the dashboard
+    can render metrics, training details and dependency versions without
+    touching the filesystem directly. Returns ``503 model_not_ready`` if
+    the API has not loaded its artifact yet.
+    """
+
+    return _request_json("GET", f"{api_url.rstrip('/')}/model-info")
+
+
 def _render_response(response: ApiResponse, *, expected_error_code: str | None) -> None:
     """Render the API response with the same shape regardless of status."""
 
@@ -192,6 +211,113 @@ def _render_response(response: ApiResponse, *, expected_error_code: str | None) 
     if headers_view:
         with st.expander("Todos os headers"):
             st.json(headers_view)
+
+
+def _render_model_sidebar(info: dict[str, Any]) -> None:
+    """Render the loaded model manifest in the sidebar.
+
+    The manifest comes straight from ``GET /model-info`` and mirrors the
+    validated ``metadata.json``. The renderer is split into five panels so
+    every relevant property of the inference model is visible at a glance:
+
+    1. **Identidade** — version, name, task and supported language.
+    2. **Treinamento** — split sizes, random seed, git commit, dirty flag,
+       creation timestamp and dependency versions.
+    3. **Seleção do classificador** — chosen classifier and the
+       training-only cross-validation summary of both candidates.
+    4. **Métricas** — overall accuracy/balanced accuracy/macro F1/weighted
+       F1 plus the per-class precision/recall/F1/support table.
+    5. **Classes** — integer label set and the human-readable mapping.
+    """
+
+    st.markdown("---")
+    st.markdown("### 🧠 Modelo carregado")
+    st.caption(f"Endpoint: `GET /model-info` · versão `{info.get('model_version', '—')}`.")
+
+    with st.expander("Identidade", expanded=True):
+        st.markdown(f"- **model_version**: `{info.get('model_version', '—')}`")
+        st.markdown(f"- **model_name**: `{info.get('model_name', '—')}`")
+        st.markdown(f"- **task_type**: `{info.get('task_type', '—')}`")
+        st.markdown(f"- **language**: `{info.get('language', '—')}`")
+
+    with st.expander("Treinamento", expanded=True):
+        col_a, col_b = st.columns(2)
+        col_a.metric("n_train", f"{info.get('n_train', 0):,}".replace(",", "."))
+        col_b.metric("n_test", f"{info.get('n_test', 0):,}".replace(",", "."))
+        random_state = info.get("random_state", "—")
+        st.markdown(f"- **random_state**: `{random_state}`")
+        git_commit = info.get("git_commit", "unknown")
+        git_dirty = info.get("git_dirty", False)
+        dirty_marker = " *(dirty)*" if git_dirty else ""
+        st.markdown(f"- **git_commit**: `{git_commit}`{dirty_marker}")
+        st.markdown(f"- **created_at**: `{info.get('created_at', '—')}`")
+        deps = info.get("dependency_versions", {}) or {}
+        if deps:
+            st.markdown("**dependency_versions**")
+            st.json(deps)
+
+    selection = info.get("selection", {}) or {}
+    candidates = selection.get("candidates", {}) or {}
+    with st.expander("Seleção do classificador", expanded=False):
+        st.markdown(f"- **selected_classifier**: `{selection.get('selected_classifier', '—')}`")
+        st.markdown(f"- **metric**: `{selection.get('metric', '—')}`")
+        st.markdown(f"- **folds**: `{selection.get('folds', '—')}`")
+        st.markdown(
+            "- **test_set_used_for_selection**: "
+            f"`{selection.get('test_set_used_for_selection', '—')}`"
+        )
+        if candidates:
+            st.markdown("**Candidatos (cross-validation no treino)**")
+            for name, payload in candidates.items():
+                mean = float(payload.get("mean_macro_f1", 0.0))
+                std = float(payload.get("std_macro_f1", 0.0))
+                marker = " ← escolhido" if name == selection.get("selected_classifier") else ""
+                st.markdown(f"- `{name}`{marker}: mean macro F1 = **{mean:.4f}** (± {std:.4f})")
+
+    metrics = info.get("metrics", {}) or {}
+    per_class = metrics.get("per_class", {}) or {}
+    with st.expander("Métricas", expanded=True):
+        overall = metrics.get("overall") or {
+            "accuracy": metrics.get("accuracy"),
+            "balanced_accuracy": metrics.get("balanced_accuracy"),
+            "macro_f1": metrics.get("macro_f1"),
+            "weighted_f1": metrics.get("weighted_f1"),
+        }
+        col1, col2 = st.columns(2)
+        col1.metric("accuracy", _format_pct(overall.get("accuracy")))
+        col2.metric("balanced_accuracy", _format_pct(overall.get("balanced_accuracy")))
+        col3, col4 = st.columns(2)
+        col3.metric("macro_f1", _format_pct(overall.get("macro_f1")))
+        col4.metric("weighted_f1", _format_pct(overall.get("weighted_f1")))
+        if per_class:
+            st.markdown("**Per-class**")
+            rows = [
+                {
+                    "class": class_label,
+                    "precision": _format_pct(payload.get("precision")),
+                    "recall": _format_pct(payload.get("recall")),
+                    "f1": _format_pct(payload.get("f1")),
+                    "support": payload.get("support", 0),
+                }
+                for class_label, payload in per_class.items()
+            ]
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+
+    label_mapping = info.get("label_mapping", {}) or {}
+    classes = info.get("classes", []) or []
+    with st.expander("Classes & mapeamento", expanded=False):
+        st.markdown(f"- **classes**: `{classes}`")
+        if label_mapping:
+            rows = [{"label": key, "name": value} for key, value in sorted(label_mapping.items())]
+            st.dataframe(rows, hide_index=True, use_container_width=True)
+
+
+def _format_pct(value: float | int | None) -> str:
+    """Format a 0..1 metric as a fixed-precision percentage string."""
+
+    if value is None:
+        return "—"
+    return f"{float(value) * 100:.2f}%"
 
 
 def _render_css() -> None:
@@ -262,6 +388,42 @@ def main() -> None:
 
         if st.button("🔄 Atualizar health", use_container_width=True):
             st.session_state["force_health"] = True
+
+        st.markdown("---")
+        st.markdown("### 🧠 Modelo")
+        st.caption(
+            f"Chama `GET /model-info` em **{api_url}** para inspecionar "
+            "o artefato carregado pela API."
+        )
+        if st.button("🔄 Atualizar info do modelo", use_container_width=True, key="refresh_model"):
+            st.session_state["force_model_info"] = True
+
+        model_info_error: str | None = None
+        model_info_payload: dict[str, Any] | None = st.session_state.get("model_info_payload")
+        if model_info_payload is None or st.session_state.get("force_model_info"):
+            try:
+                with st.spinner("Chamando /model-info ..."):
+                    response = _get_model_info(api_url)
+            except requests.RequestException as exc:
+                model_info_error = f"Falha ao chamar /model-info: {exc}"
+            else:
+                if response.status_code == SUCCESS_STATUS and isinstance(response.body, dict):
+                    model_info_payload = response.body
+                    st.session_state["model_info_payload"] = response.body
+                    st.session_state["force_model_info"] = False
+                else:
+                    model_info_error = (
+                        f"/model-info respondeu HTTP {response.status_code}: "
+                        f"{response.body.get('error_code', '—')}"
+                    )
+                st.session_state["force_model_info"] = False
+
+        if model_info_error is not None:
+            st.error(model_info_error)
+        elif isinstance(model_info_payload, dict):
+            _render_model_sidebar(model_info_payload)
+        else:
+            st.info("Sem dados do modelo. Atualize para carregar o manifesto.")
 
         st.markdown("---")
         st.markdown("### 📚 Atalhos")
@@ -373,8 +535,9 @@ def main() -> None:
 
     st.markdown("---")
     st.caption(
-        "Smoke dashboard v1 · triage_ml · sem persistência de payloads. "
-        "Latência, taxa de erro e volume pertencem ao Prometheus/Grafana."
+        "Dev dashboard v1 · triage_ml · sem persistência de payloads. "
+        "Latência, taxa de erro e volume pertencem ao Prometheus/Grafana; "
+        "informações do modelo carregado ficam na sidebar via /model-info."
     )
 
 
