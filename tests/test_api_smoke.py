@@ -72,6 +72,22 @@ def test_empty_text_returns_422_sanitized(client: TestClient) -> None:
     assert "request_id" in body
 
 
+def test_blank_text_returns_422(client: TestClient) -> None:
+    """Text made of only whitespace must be rejected, not passed to the pipeline."""
+    response = client.post("/predict", json={"text": "   \n\t  "})
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error_code"] == "validation_failed"
+    assert body["request_id"]
+
+
+def test_text_with_only_padding_around_real_text_warns(client: TestClient) -> None:
+    response = client.post("/predict", json={"text": "   liver tumor   "})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["warnings"] == ["leading_or_trailing_whitespace_stripped"]
+
+
 def test_missing_text_field_returns_422(client: TestClient) -> None:
     response = client.post("/predict", json={})
     assert response.status_code == 422

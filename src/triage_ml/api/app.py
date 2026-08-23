@@ -28,6 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from triage_ml.api.schemas import ErrorOut, HealthOut, PredictIn, PredictOut
+from triage_ml.models.artifact import ArtifactIntegrityError, verify_artifact_integrity
 
 logger = logging.getLogger("triage_ml.api")
 
@@ -65,14 +66,23 @@ class ModelHolder:
         try:
             self.pipeline = joblib.load(joblib_path)
             self.metadata = _read_json(metadata_path)
+            # Integrity check: refuse to serve a model whose checksum does not
+            # match its recorded metadata. This protects against silent model
+            # swap and against loading a metadata written for a different file.
+            verify_artifact_integrity(joblib_path=joblib_path, metadata=self.metadata)
             self.classes = (
                 _read_json(classes_path) if classes_path.exists() else list(self.pipeline.classes_)
             )
             self.model_version = str(self.metadata.get("model_version", "unknown"))
             self.label_names = _load_label_names(self.labels_csv)
+        except ArtifactIntegrityError as exc:
+            self.error = f"artifact integrity check failed: {exc}"
+            logger.error(self.error)
+            self.pipeline = None
         except Exception as exc:  # pragma: no cover - defensive
             self.error = f"failed to load model: {exc}"
             logger.exception("model load failed")
+            self.pipeline = None
 
     @property
     def loaded(self) -> bool:
@@ -161,19 +171,29 @@ def _build_app() -> FastAPI:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="model not ready"
             )
 
-        warnings: list[str] = []
         text = payload.text.strip()
+        # Reject blank text *before* invoking the pipeline. Some vectorizers
+        # raise on empty vocabulary (or accept the empty string silently and
+        # produce undefined probabilities); the contract requires a hard 422.
         if not text:
-            warnings.append("empty_text_after_strip")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="text must contain at least one non-whitespace character",
+            )
+
+        warnings: list[str] = []
+        if payload.text != text:
+            warnings.append("leading_or_trailing_whitespace_stripped")
+
         started = time.perf_counter()
         try:
             label = int(holder.pipeline.predict([text])[0])
-        except Exception:
+        except Exception as exc:
             logger.exception("/predict inference failed (rid=%s)", request_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="prediction_failed",
-            ) from None
+            ) from exc
         score: float | None = None
         if hasattr(holder.pipeline, "predict_proba"):
             try:
@@ -184,7 +204,7 @@ def _build_app() -> FastAPI:
                 score = None
         elapsed_ms = (time.perf_counter() - started) * 1000.0
         label_name = holder.label_names.get(label, "unknown")
-        response = PredictOut(
+        return PredictOut(
             label=label,
             label_name=label_name,
             score=score,
@@ -193,11 +213,6 @@ def _build_app() -> FastAPI:
             request_id=request_id,
             warnings=warnings,
         )
-        # We can't easily mutate the response headers from here, but the
-        # ``Server-Timing`` value is also exposed via the ASGI timing
-        # headers added by FastAPI when instrumented. The body carries
-        # the canonical latency in ``latency_ms``.
-        return response
 
     return app
 
