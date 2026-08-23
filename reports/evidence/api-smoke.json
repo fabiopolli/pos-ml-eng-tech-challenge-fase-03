@@ -11,60 +11,60 @@
       "label_name": "neoplasms",
       "score": 0.4844231321130232,
       "model_version": "v1",
-      "latency_ms": 10.965876001137076,
-      "request_id": "3b4f0ed75e1b",
+      "latency_ms": 6.857501000922639,
+      "request_id": "f0121ae9d9b2",
       "warnings": [],
-      "headers_x_request_id": "3b4f0ed75e1b"
+      "headers_x_request_id": "f0121ae9d9b2"
     },
     {
       "label": 4,
       "label_name": "cardiovascular diseases",
       "score": 0.5496698898686027,
       "model_version": "v1",
-      "latency_ms": 1.779500000338885,
-      "request_id": "d74113a283d1",
+      "latency_ms": 0.8374609988095472,
+      "request_id": "5206b7488c69",
       "warnings": [],
-      "headers_x_request_id": "d74113a283d1"
+      "headers_x_request_id": "5206b7488c69"
     },
     {
       "label": 1,
       "label_name": "neoplasms",
       "score": 0.3927883631170643,
       "model_version": "v1",
-      "latency_ms": 0.9610859997337684,
-      "request_id": "4418be4b774f",
+      "latency_ms": 0.9515189994999673,
+      "request_id": "7710c7ed5558",
       "warnings": [],
-      "headers_x_request_id": "4418be4b774f"
+      "headers_x_request_id": "7710c7ed5558"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
       "score": 0.32322576045471063,
       "model_version": "v1",
-      "latency_ms": 0.8056699989538174,
-      "request_id": "1f800f507f56",
+      "latency_ms": 0.9089279992622323,
+      "request_id": "9548006bf525",
       "warnings": [],
-      "headers_x_request_id": "1f800f507f56"
+      "headers_x_request_id": "9548006bf525"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
       "score": 0.3454079773983357,
       "model_version": "v1",
-      "latency_ms": 1.2225859991303878,
-      "request_id": "92cb09e91e67",
+      "latency_ms": 0.83186099982413,
+      "request_id": "2524d4d66387",
       "warnings": [],
-      "headers_x_request_id": "92cb09e91e67"
+      "headers_x_request_id": "2524d4d66387"
     }
   ],
   "empty_text_request": {
     "status_code": 422,
     "body": {
-      "request_id": "18a3e866b537",
+      "request_id": "b005100256ef",
       "error_code": "validation_failed",
       "message": "Request body is invalid."
     },
-    "headers_x_request_id": "18a3e866b537"
+    "headers_x_request_id": "b005100256ef"
   },
   "custom_request_id": {
     "status_code": 200,
