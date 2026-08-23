@@ -31,8 +31,6 @@ Dashboard Streamlit que fala HTTP com qualquer instância da API
   métricas globais (`accuracy`, `balanced_accuracy`, `macro_f1`,
   `weighted_f1`) e métricas per-classe (`precision`, `recall`, `f1`,
   `support`) em formato tabular.
-- **📚 Atalhos** — links `file://` para a documentação versionada
-  (Plan do classificador, Checklist oficial, Relatório Fase 1).
 
 A conexão é HTTP contra a URL configurada na sidebar (default
 `http://127.0.0.1:8000`). O dashboard não toca o artefato do modelo

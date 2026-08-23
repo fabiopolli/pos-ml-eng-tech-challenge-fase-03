@@ -16,7 +16,7 @@ Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — F
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
 - API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana). O endpoint `/reload` permite trocar o holder em runtime após re-validar manifesto + checksum (`ModelHolder.reload_to`); falhas preservam o modelo anterior.
-- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **67 testes verdes** em `uv run pytest`.
+- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **66 testes verdes** em `uv run pytest`.
 - Lint e formatação verdes (`ruff check .` / `ruff format .`).
 
 ## 2. Escopo e alinhamento com o plano
@@ -246,12 +246,12 @@ Cobertura por arquivo:
 | `tests/test_model_training.py` | 1 | Integração `run_training + load_artifact` em dataset sintético, garantindo `selection.candidates = {logreg, linear_svc}`, `test_set_used_for_selection=False`, balanced_accuracy presente, `pipeline.classes_ == metadata.classes` |
 | `tests/test_dev_api.py` | 15 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado, `/model-info` retorna manifesto validado e 503 quando o artefato não está carregado, `/models` lista newest-first e tolera `models/` ausente, `/reload` troca o holder e devolve 404 `model_not_found` para versão inexistente, `ModelHolder.reload_to` recusa-se a mutar o holder em falha |
 | `tests/test_dev_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
-| `tests/test_dev_dashboard_helpers.py` | 15 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `_get_model_info`, `_render_model_sidebar`, `_format_pct`, `_list_models`, `_reload_model`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`, atalhos de documentação, raiz do repo) — mocka `requests.request` e `streamlit.*`, não precisa de API rodando |
+| `tests/test_dev_dashboard_helpers.py` | 14 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `_get_model_info`, `_render_model_sidebar`, `_format_pct`, `_list_models`, `_reload_model`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`, raiz do repo) — mocka `requests.request` e `streamlit.*`, não precisa de API rodando |
 
 Comando único:
 
 ```bash
-uv run pytest   # 67 passed in ~3s
+uv run pytest   # 66 passed in ~3s
 uv run ruff check .
 uv run ruff format .
 ```
@@ -276,7 +276,6 @@ Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/
   - **Seleção do classificador** — `selected_classifier`, métrica, folds, `test_set_used_for_selection=False`, mais tabela inline com `mean_macro_f1 ± std_macro_f1` dos candidatos `logreg` × `linear_svc` (marcando o escolhido com `← escolhido`).
   - **Métricas** — quatro `st.metric` (accuracy / balanced_accuracy / macro_f1 / weighted_f1) e tabela per-classe (`precision`, `recall`, `f1`, `support`).
   - **Classes & mapeamento** — lista de classes e tabela com `label` ↔ `name`.
-- **Atalhos** — links `file://` para a documentação versionada (Plan, Checklist, Relatório Fase 1).
 
 O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos. Validação manual local usando os próprios helpers contra a API rodando em `127.0.0.1:8765`:
 

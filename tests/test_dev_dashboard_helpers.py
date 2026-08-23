@@ -174,25 +174,6 @@ def test_url_stripping_handles_trailing_slash(dashboard_module):
     assert url == "http://api.example.com/health"
 
 
-def test_documentation_shortcuts_point_to_existing_files(dashboard_module):
-    """The sidebar shortcuts resolve to real markdown files via file:// URIs.
-
-    Regression for the broken relative links (they used to point to
-    ``/docs/...`` inside the Streamlit server, which 404s).
-    """
-
-    expected = {
-        dashboard_module.DOC_PLAN: "Plan do classificador",
-        dashboard_module.DOC_CHECKLIST: "Checklist oficial",
-        dashboard_module.DOC_REPORT_FASE_1: "Relatório Fase 1",
-    }
-    for path, label in expected.items():
-        assert path.is_file(), f"{label} target missing: {path}"
-        uri = path.as_uri()
-        assert uri.startswith("file:///"), f"{label} uri malformed: {uri}"
-        assert path.name in uri, f"{label} uri should mention the filename"
-
-
 def test_repo_root_is_above_dashboard(dashboard_module):
     """``REPO_ROOT`` walks one level up from ``front/app_dev.py`` to the repo root."""
 

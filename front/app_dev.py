@@ -22,7 +22,10 @@ Abas:
 
 Sidebar:
   * **Conexão** — URL base da API + botão para revalidar ``/health``.
-  * **Modelo** — bloco que consome ``GET /model-info`` e mostra
+  * **🔁 Trocar modelo** — consome ``GET /models`` e ``POST /reload``
+    para listar versões imutáveis e trocar o holder da API em runtime
+    (após re-validar manifesto + checksum).
+  * **🧠 Modelo** — bloco que consome ``GET /model-info`` e mostra
     identidade, métricas de treino, seleção do classificador, métricas
     globais/per-classe e mapeamento de labels.
 
@@ -47,15 +50,11 @@ PAGE_TITLE = "triage_ml — Dev API"
 PAGE_ICON = "🧪"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 10.0
-
-# Absolute path to the repo root so the documentation shortcuts resolve
-# regardless of where the dashboard is run from. ``Path.as_uri()`` builds
-# a portable ``file:///`` URI.
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DOC_PLAN = REPO_ROOT / "docs" / "plans" / "PLAN-text-classifier.md"
-DOC_CHECKLIST = REPO_ROOT / "docs" / "CHECKLIST.md"
-DOC_REPORT_FASE_1 = REPO_ROOT / "docs" / "reports" / "IMPLEMENTATION-REPORT-FASE-1.md"
 SUCCESS_STATUS = 200
+
+# Absolute path to the repo root. Used by the dashboard tests to confirm
+# the dashboard is rooted one level under the project tree.
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 LANGUAGE_PRESETS: dict[str, dict[str, str]] = {
     "Texto curto (<20 chars)": {
@@ -542,15 +541,6 @@ def main() -> None:
             _render_model_sidebar(model_info_payload)
         else:
             st.info("Sem dados do modelo. Atualize para carregar o manifesto.")
-
-        st.markdown("---")
-        st.markdown("### 📚 Atalhos")
-        # ``file://`` URIs abrem o arquivo local no editor/sistema padrão;
-        # caminhos relativos quebram porque o Streamlit serve a partir de
-        # ``localhost:8501`` e qualquer rota ``/docs/...`` cai em 404.
-        st.markdown(f"- [Plan do classificador]({DOC_PLAN.as_uri()})")
-        st.markdown(f"- [Checklist oficial]({DOC_CHECKLIST.as_uri()})")
-        st.markdown(f"- [Relatório Fase 1]({DOC_REPORT_FASE_1.as_uri()})")
 
     tab_health, tab_predict, tab_language = st.tabs(
         ["🩺 Health", "🎯 Predição", "🌐 Política de idioma"]

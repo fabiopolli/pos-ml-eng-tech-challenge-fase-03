@@ -219,7 +219,6 @@ Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em 
 - **Conexão** — URL base da API + botão "Atualizar health".
 - **🔁 Trocar modelo** — consome `GET /models` para listar versões imutáveis disponíveis em `models/`, mostra a versão em uso, deixa selecionar outra via `<selectbox>` e dispara `POST /reload`. Estado apenas em memória.
 - **🧠 Modelo** — consome `GET /model-info` e exibe, em expanders, a identidade do artefato carregado (`model_version`, `model_name`, `task_type`, `language`), dados de treinamento (`n_train`, `n_test`, `random_state`, `git_commit`, `created_at`, `dependency_versions`), a seleção do classificador (candidatos `logreg` × `linear_svc` com `mean_macro_f1 ± std`) e as métricas (`accuracy`, `balanced_accuracy`, `macro_f1`, `weighted_f1` globais + tabela per-classe com precision/recall/F1/support).
-- **📚 Atalhos** — links `file://` para o Plan do classificador, Checklist oficial e Relatório Fase 1.
 
 ```bash
 # 1. Suba a API em outro terminal
