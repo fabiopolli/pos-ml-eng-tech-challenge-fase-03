@@ -102,14 +102,97 @@ Os comandos da API, Airflow e stack de observabilidade serão acrescentados quan
 
 - [x] Criar repositório e definir arquitetura inicial — Fábio
 - [x] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
-- [ ] Treinar classificador de texto — Bill
-- [ ] Construir API FastAPI — Romário
+- [x] Treinar classificador de texto (baseline TF-IDF + classificador linear) — Bill
+- [~] Construir API FastAPI — Romário (Bill disponibilizou uma API de smoke em `src/triage_ml/api/` para acelerar testes locais)
 - [~] Configurar CI/CD, Docker e testes — Fábio (CI inicial criado; Docker pendente)
 - [ ] Implementar DAG Airflow funcional — Denis
 - [ ] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill
 - [ ] Documentar arquitetura em nuvem — Romário
 - [~] Manter documentação detalhada — Fábio (documento vivo)
 - [ ] Gravar vídeo STAR de até cinco minutos — Romário
+
+## Modelo (Bill)
+
+Esta seção documenta a entrega do classificador NLP leve do projeto.
+
+### O que o modelo faz
+
+O classificador recebe um texto livre (abstract médico) e devolve uma das cinco categorias clínicas do **Medical Abstracts TC Corpus**:
+
+| `label` | `label_name` |
+|---|---|
+| 1 | neoplasms |
+| 2 | digestive system diseases |
+| 3 | nervous system diseases |
+| 4 | cardiovascular diseases |
+| 5 | general pathological conditions |
+
+> **Nota sobre o descompasso com o enunciado.** O enunciado do Tech Challenge sugere um classificador de urgência (`normal` / `atenção` / `urgente`). Os professores autorizaram o uso das cinco categorias clínicas acima neste projeto, registradas em `data/medical_tc_labels.csv`. Isso está documentado em `docs/dataset.md` e em `docs/CHECKLIST.md`.
+
+### Stack e justificativa
+
+- **Vetorizador**: `TfidfVectorizer(ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True)`. Sugestão do enunciado; leve, determinístico, sem dependência externa.
+- **Classificador baseline**: `LogisticRegression(class_weight="balanced", solver="lbfgs", max_iter=2000)`. Probabilístico, inferência barata, suporte nativo a `predict_proba`.
+- **Classificador alternativo**: `LinearSVC` disponível em `triage_ml.models.pipeline.build_pipeline("linear_svc")` como comparativo.
+- **Por que não Random Forest?** O enunciado cita TF-IDF + Random Forest como exemplo. Em TF-IDF, RF explode o custo de inferência (centenas de árvores) sem ganho consistente de F1 sobre modelos lineares em texto. Optamos por um classificador linear, mais alinhado ao requisito de "modelo leve" e à operação real-time da API.
+- **Serialização**: `joblib` para `model.joblib`; `metadata.json` registra versões de sklearn/numpy/python, seed, métricas, fingerprint SHA-256 e configuração de preprocessing. `classes.json` persiste a ordem das classes idêntica a `pipeline.classes_`.
+- **Seeds**: 42 em todos os pontos estocásticos.
+
+### Métricas atuais (recorte preparado, 5.000 amostras, split 80/20)
+
+```
+n_train=4000 n_test=1000
+accuracy=0.7420
+macro_f1=0.7292
+weighted_f1=0.7416
+```
+
+Figuras geradas em `reports/figures/`:
+
+- `08_confusion_matrix_lr.png` — matriz de confusão no split de teste.
+- `08_top_features_lr.png` — top-12 coeficientes por classe.
+
+### Como treinar
+
+```bash
+# Treino padrão (LR) lendo data/medical_tc_train.csv
+PYTHONPATH=src uv run python -m triage_ml.models.train \
+  --summary-json models/v1/summary.json
+
+# Variante LinearSVC
+PYTHONPATH=src uv run python -m triage_ml.models.train \
+  --classifier linear_svc \
+  --summary-json models/v1/linear_svc.summary.json
+```
+
+Hiperparâmetros editáveis em `configs/training.yaml`.
+
+### Como rodar a API de smoke
+
+```bash
+PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+```
+
+Endpoints:
+
+- `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`.
+- `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message)` com HTTP 422 e nunca vazam o texto clínico.
+
+Variáveis de ambiente: `MODEL_DIR` (default `models/v1`), `LABELS_CSV` (default `data/medical_tc_labels.csv`).
+
+A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já nasce expondo `latency_ms`, `request_id` e `X-Request-ID` para acelerar a integração.
+
+### Como rodar os testes
+
+```bash
+uv run pytest             # 29 testes
+uv run ruff check .       # lint
+uv run ruff format .      # format
+```
+
+### Plano de implementação
+
+O detalhamento completo (Fase 1 e Fase 2) está em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md). A Fase 2 — otimização ONNX, Prometheus, Grafana e dashboard — ainda não foi executada.
 
 ## Como colaborar com o Codex
 

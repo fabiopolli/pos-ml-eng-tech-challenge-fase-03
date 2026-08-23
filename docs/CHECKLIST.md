@@ -68,13 +68,15 @@ Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerent
 
 ### Modelagem baseline — Bill
 
-- [ ] Criar baseline leve, por exemplo TF-IDF + classificador Scikit-Learn.
-- [ ] Fixar seeds, preprocessing e versões relevantes.
-- [ ] Reportar métricas adequadas por classe e agregadas.
-- [ ] Serializar modelo e metadados segundo o contrato.
-- [ ] API de smoke local (`/health` + `/predict`) consumindo o artefato serializado, com `latency_ms`, `request_id` e headers `X-Request-ID` / `Server-Timing`.
+- [x] Criar baseline leve (TF-IDF + LogisticRegression com `class_weight="balanced"`, solver `lbfgs`). LinearSVC disponível como comparativo.
+- [x] Seeds, preprocessing, fingerprints e versões fixas (seed 42, sklearn/numpy/python em `metadata.json`, SHA-256 do `model.joblib`).
+- [x] Métricas por classe e agregadas, com figuras em `reports/figures/08_confusion_matrix_lr.png` e `08_top_features_lr.png`.
+- [x] Modelo e metadados serializados segundo contrato e validados por checksum (`models/v1/{model.joblib, classes.json, metadata.json}`).
+- [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
 
-Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, métricas reportadas, artefato e API de smoke prontos. A otimização em si entra na Etapa 5.
+**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7420`, `macro_f1=0.7292`, `weighted_f1=0.7416`. Resumo completo em `models/v1/summary.json`. Smoke da API em `reports/evidence/api-smoke.json`.
+
+Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, otimização bem-sucedida e melhoria demonstrada. A otimização em si entra na Etapa 5.
 
 ## Etapa 3 — API oficial servindo o modelo (Romário)
 
