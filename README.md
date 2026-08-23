@@ -132,37 +132,36 @@ O classificador recebe um texto livre (abstract médico) e devolve uma das cinco
 ### Stack e justificativa
 
 - **Vetorizador**: `TfidfVectorizer(ngram_range=(1,2), min_df=2, max_df=0.95, sublinear_tf=True)`. Sugestão do enunciado; leve, determinístico, sem dependência externa.
-- **Classificador baseline**: `LogisticRegression(class_weight="balanced", solver="lbfgs", max_iter=2000)`. Probabilístico, inferência barata, suporte nativo a `predict_proba`.
-- **Classificador alternativo**: `LinearSVC` disponível em `triage_ml.models.pipeline.build_pipeline("linear_svc")` como comparativo.
+- **Seleção do baseline**: `LogisticRegression` e `LinearSVC`, ambos com `class_weight="balanced"`, são comparados por macro-F1 em validação cruzada estratificada somente no treino. O `LinearSVC` foi selecionado (`0.7335` contra `0.7319`) antes da avaliação final no teste.
+- **Score**: `LinearSVC` não expõe `predict_proba`; por isso a API retorna `score=null` para o artefato selecionado. Um override explícito de Logistic Regression continua disponível para experimentos.
 - **Por que não Random Forest?** O enunciado cita TF-IDF + Random Forest como exemplo. Em TF-IDF, RF explode o custo de inferência (centenas de árvores) sem ganho consistente de F1 sobre modelos lineares em texto. Optamos por um classificador linear, mais alinhado ao requisito de "modelo leve" e à operação real-time da API.
-- **Serialização**: `joblib` para `model.joblib`; `metadata.json` registra versões de sklearn/numpy/python, seed, métricas, fingerprint SHA-256 e configuração de preprocessing. `classes.json` persiste a ordem das classes idêntica a `pipeline.classes_`.
+- **Serialização**: diretórios imutáveis `YYYYMMDDTHHMMSSZ-<input_hash>` com `model.joblib`, `classes.json` e `metadata.json`. O manifesto registra schema, classes e nomes, seleção, versões, commit Git, fingerprints dos dados/splits/configuração e checksum do modelo. O loader valida tudo antes de desserializar o `joblib`.
 - **Seeds**: 42 em todos os pontos estocásticos.
 
 ### Métricas atuais (recorte preparado, 5.000 amostras, split 80/20)
 
 ```
 n_train=4000 n_test=1000
-accuracy=0.7420
-macro_f1=0.7292
-weighted_f1=0.7416
+accuracy=0.7460
+balanced_accuracy=0.7221
+macro_f1=0.7296
+weighted_f1=0.7438
 ```
 
 Figuras geradas em `reports/figures/`:
 
-- `08_confusion_matrix_lr.png` — matriz de confusão no split de teste.
-- `08_top_features_lr.png` — top-12 coeficientes por classe.
+- `08_confusion_matrix_linear_svc.png` — matriz de confusão do modelo selecionado no split de teste.
+- `08_top_features_linear_svc.png` — top-12 coeficientes por classe.
 
 ### Como treinar
 
 ```bash
-# Treino padrão (LR) lendo data/medical_tc_train.csv
-PYTHONPATH=src uv run python -m triage_ml.models.train \
-  --summary-json models/v1/summary.json
+# Compara LR/LinearSVC no treino, seleciona o melhor e cria uma versão imutável
+PYTHONPATH=src uv run python -m triage_ml.models.train
 
-# Variante LinearSVC
+# Override explícito para reproduzir um candidato específico
 PYTHONPATH=src uv run python -m triage_ml.models.train \
-  --classifier linear_svc \
-  --summary-json models/v1/linear_svc.summary.json
+  --classifier logreg
 ```
 
 Hiperparâmetros editáveis em `configs/training.yaml`.
@@ -170,6 +169,7 @@ Hiperparâmetros editáveis em `configs/training.yaml`.
 ### Como rodar a API de smoke
 
 ```bash
+export MODEL_PATH=models/YYYYMMDDTHHMMSSZ-input_hash/model.joblib
 PYTHONPATH=src uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
 ```
 
@@ -178,14 +178,14 @@ Endpoints:
 - `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`.
 - `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message)` com HTTP 422 e nunca vazam o texto clínico.
 
-Variáveis de ambiente: `MODEL_DIR` (default `models/v1`), `LABELS_CSV` (default `data/medical_tc_labels.csv`).
+Variável de ambiente: `MODEL_PATH`, apontando para o `model.joblib` versionado. Sem ela, a smoke local usa o artefato timestampado mais recente em `models/`; a aplicação falha rapidamente se o artefato estiver ausente ou incompatível. Os nomes das classes vêm somente do `metadata.json`.
 
-A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já nasce expondo `latency_ms`, `request_id` e `X-Request-ID` para acelerar a integração.
+A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já expõe `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` para acelerar a integração.
 
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 29 testes
+uv run pytest             # 34 testes
 uv run ruff check .       # lint
 uv run ruff format .      # format
 ```
@@ -204,4 +204,3 @@ Leia [`docs/WORKFLOW_AGENTICO.md`](docs/WORKFLOW_AGENTICO.md). Em resumo, identi
 - [`docs/WORKFLOW_AGENTICO.md`](docs/WORKFLOW_AGENTICO.md): guia e casos de uso do Codex.
 - [`docs/adr/README.md`](docs/adr/README.md): decisões arquiteturais.
 - [`.agents/contracts/README.md`](.agents/contracts/README.md): contratos entre os componentes.
-

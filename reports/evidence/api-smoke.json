@@ -2,73 +2,73 @@
   "endpoint": "/predict (smoke API)",
   "health": {
     "status": "ok",
-    "model_version": "v1",
+    "model_version": "20260823T135811Z-bed2194376bc",
     "model_loaded": true
   },
   "predictions": [
     {
       "label": 1,
       "label_name": "neoplasms",
-      "score": 0.4844231321130232,
-      "model_version": "v1",
-      "latency_ms": 6.857501000922639,
-      "request_id": "f0121ae9d9b2",
+      "score": null,
+      "model_version": "20260823T135811Z-bed2194376bc",
+      "latency_ms": 7.078753000314464,
+      "request_id": "4b65737f9a15",
       "warnings": [],
-      "headers_x_request_id": "f0121ae9d9b2"
+      "headers_x_request_id": "4b65737f9a15",
+      "header_server_timing": "predict;dur=7.079"
     },
     {
       "label": 4,
       "label_name": "cardiovascular diseases",
-      "score": 0.5496698898686027,
-      "model_version": "v1",
-      "latency_ms": 0.8374609988095472,
-      "request_id": "5206b7488c69",
+      "score": null,
+      "model_version": "20260823T135811Z-bed2194376bc",
+      "latency_ms": 0.6645920002483763,
+      "request_id": "33b81c7af921",
       "warnings": [],
-      "headers_x_request_id": "5206b7488c69"
+      "headers_x_request_id": "33b81c7af921",
+      "header_server_timing": "predict;dur=0.665"
     },
     {
       "label": 1,
       "label_name": "neoplasms",
-      "score": 0.3927883631170643,
-      "model_version": "v1",
-      "latency_ms": 0.9515189994999673,
-      "request_id": "7710c7ed5558",
+      "score": null,
+      "model_version": "20260823T135811Z-bed2194376bc",
+      "latency_ms": 0.5776950001745718,
+      "request_id": "42f6475b1ea6",
       "warnings": [],
-      "headers_x_request_id": "7710c7ed5558"
+      "headers_x_request_id": "42f6475b1ea6",
+      "header_server_timing": "predict;dur=0.578"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
-      "score": 0.32322576045471063,
-      "model_version": "v1",
-      "latency_ms": 0.9089279992622323,
-      "request_id": "9548006bf525",
+      "score": null,
+      "model_version": "20260823T135811Z-bed2194376bc",
+      "latency_ms": 0.5212280011619441,
+      "request_id": "0c6a3ad06d1c",
       "warnings": [],
-      "headers_x_request_id": "9548006bf525"
+      "headers_x_request_id": "0c6a3ad06d1c",
+      "header_server_timing": "predict;dur=0.521"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
-      "score": 0.3454079773983357,
-      "model_version": "v1",
-      "latency_ms": 0.83186099982413,
-      "request_id": "2524d4d66387",
+      "score": null,
+      "model_version": "20260823T135811Z-bed2194376bc",
+      "latency_ms": 0.5174899997655302,
+      "request_id": "5eb5a07ae151",
       "warnings": [],
-      "headers_x_request_id": "2524d4d66387"
+      "headers_x_request_id": "5eb5a07ae151",
+      "header_server_timing": "predict;dur=0.517"
     }
   ],
   "empty_text_request": {
     "status_code": 422,
     "body": {
-      "request_id": "b005100256ef",
+      "request_id": "19ce21d73bfc",
       "error_code": "validation_failed",
       "message": "Request body is invalid."
     },
-    "headers_x_request_id": "b005100256ef"
-  },
-  "custom_request_id": {
-    "status_code": 200,
-    "headers_x_request_id": "rid-test-1",
-    "body_request_id": "rid-test-1"
+    "headers_x_request_id": "19ce21d73bfc"
   }
 }

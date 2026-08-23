@@ -2,7 +2,7 @@
 
 - **Integrante**: Bill
 - **Origem**: Tech Challenge — Fase 3 (ML Engineering)
-- **Status**: plano, ainda não executado
+- **Status**: Fase 1 entregue e revisada; Fase 2 pendente
 - **Mapeamento no checklist**: cobre as Etapas 2, 5 e 6 do `docs/CHECKLIST.md` reordenado (2026-08-23). Está organizado em duas fases para deixar claro o que é trabalho **agora** e o que é trabalho **depois**.
 
 ## Estrutura por fases
@@ -52,8 +52,8 @@ A API oficial é do Romário (Etapa 3). Esta API de smoke é substituída ou est
 | Decisão | Escolha | Justificativa |
 |---|---|---|
 | Vetorizador | `TfidfVectorizer` | Sugestão do enunciado; leve, determinístico, sem dependência externa |
-| Classificador baseline (primário) | `LogisticRegression(class_weight="balanced", max_iter=2000, solver="lbfgs")` | Linear, probabilístico, inferência barata, suporte nativo a cinco classes e `predict_proba` no Scikit-Learn atual |
-| Classificador baseline (secundário) | `LinearSVC(class_weight="balanced")` | SVM linear é estado da arte em texto esparso; mais rápido em inferência que LR; comparativo |
+| Candidatos do baseline | `LogisticRegression(class_weight="balanced", max_iter=2000, solver="lbfgs")` e `LinearSVC(class_weight="balanced")` | Comparados por macro-F1 em validação estratificada somente no treino |
+| Modelo selecionado | `LinearSVC` | Maior macro-F1 médio na validação (`0.7335` contra `0.7319`); o teste permaneceu isolado até a escolha |
 | Por que não Random Forest? | — | Exemplo do enunciado. Em TF-IDF, RF explode o custo de inferência (centenas de árvores) sem ganho consistente sobre modelos lineares em texto. Justificativa registrada no README seção Bill |
 | Serialização | `joblib` para o pipeline scikit-learn | Padrão sklearn |
 | API (smoke) | FastAPI + Uvicorn, em processo local sem Docker | Suficiente para teste manual; Docker e Compose ficam para Etapa 4 (Fábio) e Fase 2 |
@@ -85,8 +85,8 @@ reports/
 ├── evidence/
 │   └── api-smoke.json         # resposta sanitizada, sem os textos enviados
 └── figures/
-    ├── 08_confusion_matrix_lr.png
-    └── 08_top_features_lr.png
+    ├── 08_confusion_matrix_linear_svc.png
+    └── 08_top_features_linear_svc.png
 configs/
 └── training.yaml              # hiperparâmetros e label mapping versionados
 ```
@@ -129,7 +129,7 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 
 ### F1.T2. Pipeline e treino
 - `pipeline.py`: `build_pipeline(classifier="logreg", config=...)` retorna `Pipeline([("tfidf", ...), ("clf", ...)])` com parâmetros explícitos e validados.
-- `train.py`: `run_training(raw_csv_path, out_dir, *, classifier="logreg", sample_size=5_000, test_size=0.2, random_state=42)`.
+- `train.py`: `run_training(raw_csv_path, out_dir, *, classifier=None, sample_size=5_000, test_size=0.2, random_state=42)`; `classifier=None` seleciona por CV e um valor explícito funciona como override auditável.
   - Carrega CSV bruto.
   - Aplica `prepare_dataset` e `split_dataset`.
   - Compara LR e LinearSVC por validação cruzada estratificada somente no conjunto de treino, usando macro-F1 como métrica primária.
@@ -138,7 +138,7 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
   - Serializa em `models/<versão>/{model.joblib, metadata.json}` e grava fingerprints suficientes para regenerar e verificar os splits sem persistir textos no Git.
   - Salva figuras em `reports/figures/`.
   - Retorna dicionário com métricas e caminhos.
-- CLI: `python -m triage_ml.models.train --classifier logreg`.
+- CLI: `python -m triage_ml.models.train` seleciona por CV; `--classifier logreg|linear_svc` força um candidato e registra o override.
 
 ### F1.T3. Tests do baseline
 - `tests/test_model_pipeline.py`: usa fixture sintética pequena e cobre fit multiclasses, shapes, configuração reproduzível e presença de `predict_proba` no LR.
@@ -181,11 +181,11 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 
 Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 
-- [ ] Baseline TF-IDF + classificador Scikit-Learn selecionado sem usar o test set.
-- [ ] Seeds, preprocessing, fingerprints e versões fixas.
-- [ ] Métricas por classe e agregadas, com figuras em `reports/figures/`.
-- [ ] Modelo e metadados serializados segundo contrato e validados por checksum.
-- [ ] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] Baseline TF-IDF + classificador Scikit-Learn selecionado sem usar o test set.
+- [x] Seeds, preprocessing, fingerprints e versões fixas.
+- [x] Métricas por classe e agregadas, com figuras em `reports/figures/`.
+- [x] Modelo e metadados serializados segundo contrato e validados por checksum.
+- [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
 
 ## F1. Riscos específicos
 

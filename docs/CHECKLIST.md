@@ -8,7 +8,7 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 
 - [x] Repositório e arquitetura inicial — Fábio
 - [x] EDA e escolha do dataset — Denis
-- [ ] Classificador de texto (baseline) — Bill
+- [x] Classificador de texto (baseline) — Bill
 - [ ] API FastAPI — Romário
 - [~] CI/CD, Docker e testes — Fábio
 - [ ] DAG Airflow — Denis
@@ -68,13 +68,13 @@ Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerent
 
 ### Modelagem baseline — Bill
 
-- [x] Criar baseline leve (TF-IDF + LogisticRegression com `class_weight="balanced"`, solver `lbfgs`). LinearSVC disponível como comparativo.
-- [x] Seeds, preprocessing, fingerprints e versões fixas (seed 42, sklearn/numpy/python em `metadata.json`, SHA-256 do `model.joblib`).
-- [x] Métricas por classe e agregadas, com figuras em `reports/figures/08_confusion_matrix_lr.png` e `08_top_features_lr.png`.
-- [x] Modelo e metadados serializados segundo contrato e validados por checksum (`models/v1/{model.joblib, classes.json, metadata.json}`).
+- [x] Criar baseline leve TF-IDF; comparar LogisticRegression e LinearSVC somente no treino por macro-F1 estratificado e selecionar LinearSVC antes do teste.
+- [x] Seeds, preprocessing, fingerprints e versões fixas (seed 42, versões em `metadata.json`, SHA-256 de input/dataset/splits/config/modelo).
+- [x] Métricas por classe e agregadas, com figuras em `reports/figures/08_confusion_matrix_linear_svc.png` e `08_top_features_linear_svc.png`.
+- [x] Modelo e manifesto canônico serializados em diretório imutável, com schema/classes/mapping/checksum validados antes da desserialização.
 - [x] API de smoke local (`/health` + `/predict`) consumindo o artefato, com erros sanitizados, `latency_ms`, `request_id` e headers.
 
-**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7420`, `macro_f1=0.7292`, `weighted_f1=0.7416`. Resumo completo em `models/v1/summary.json`. Smoke da API em `reports/evidence/api-smoke.json`.
+**Evidência (recorte preparado 5.000, split 80/20):** `n_train=4000`, `n_test=1000`, `accuracy=0.7460`, `balanced_accuracy=0.7221`, `macro_f1=0.7296`, `weighted_f1=0.7438`. Seleção: LinearSVC `0.7335` contra LR `0.7319` em macro-F1 CV. Resumo local em `models/20260823T134214Z-bed2194376bc/summary.json`; smoke versionável em `reports/evidence/api-smoke.json`.
 
 Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, otimização bem-sucedida e melhoria demonstrada. A otimização em si entra na Etapa 5.
 

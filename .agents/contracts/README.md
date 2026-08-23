@@ -16,6 +16,9 @@ Estes contratos iniciais permitem trabalho paralelo. Alterações incompatíveis
 - expõe predição e, quando disponível, score/probabilidade;
 - artefato acompanha versão, classes, preprocessing, métricas, seed e dependências;
 - baseline e otimizado devem manter contrato comparável.
+- `metadata.json` é a fonte canônica de `schema_version`, versão, tarefa, idioma, classes e nomes, configuração, seleção, métricas, dependências, commit/estado Git, fingerprints e checksum;
+- versões seguem `YYYYMMDDTHHMMSSZ-<input_hash>` e nunca são sobrescritas;
+- o loader aceita apenas artefatos locais confiáveis, valida manifesto e checksum antes do `joblib.load` e confirma `metadata.classes == model.classes_` depois da carga.
 
 ## API
 
@@ -25,6 +28,8 @@ Contrato inicial proposto, sujeito a validação por Romário:
 - `GET /metrics`: métricas Prometheus;
 - `POST /predict`: recebe `{"text": "..."}` e devolve classe, score opcional e versão do modelo;
 - erros de validação não retornam dados internos nem o texto clínico em logs.
+- `MODEL_PATH` aponta para o `model.joblib`; nomes de classes são lidos do manifesto, sem CSV de runtime;
+- respostas de predição expõem `X-Request-ID` e `Server-Timing: predict;dur=<latency_ms>`.
 
 ## Observabilidade
 
@@ -39,4 +44,3 @@ Contrato inicial proposto, sujeito a validação por Romário:
 - tarefas idempotentes quando possível;
 - caminho/registro do artefato configurável, não hardcoded para uma máquina;
 - falhas deixam evidência acionável sem expor dados sensíveis.
-
