@@ -39,12 +39,14 @@ def test_build_classifier_logreg_defaults() -> None:
     assert clf.get_params()["solver"] == DEFAULT_LOGREG["solver"]
     assert clf.get_params()["max_iter"] == DEFAULT_LOGREG["max_iter"]
     assert clf.get_params()["class_weight"] == DEFAULT_LOGREG["class_weight"]
+    assert clf.get_params()["random_state"] == 42
 
 
 def test_build_classifier_overrides_apply() -> None:
     clf = build_classifier("linear_svc", C=2.5)
     assert clf.get_params()["C"] == 2.5
     assert clf.get_params()["class_weight"] == DEFAULT_LINEAR_SVC["class_weight"]
+    assert clf.get_params()["random_state"] == 42
 
 
 def test_build_pipeline_rejects_unknown_classifier() -> None:
@@ -69,7 +71,11 @@ def test_pipeline_end_to_end_on_tiny_corpus() -> None:
     labels = [1, 4, 3, 4, 1]
     pipeline.fit(texts, labels)
     preds = pipeline.predict(texts[:2])
+    probabilities = pipeline.predict_proba(texts[:2])
     assert isinstance(preds, np.ndarray)
+    assert preds.shape == (2,)
+    assert probabilities.shape == (2, len(set(labels)))
+    np.testing.assert_allclose(probabilities.sum(axis=1), 1.0)
     assert set(preds.tolist()).issubset(set(labels))
 
 

@@ -8,9 +8,9 @@ API.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 # Hard upper bound keeps the request body small and prevents accidental
 # abuse while still fitting the longest abstract in the corpus
@@ -18,10 +18,10 @@ from pydantic import BaseModel, Field
 
 
 class PredictIn(BaseModel):
-    text: str = Field(
-        ...,
-        min_length=1,
-        max_length=20000,
+    text: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=20000),
+    ] = Field(
         description="Free-text medical abstract to classify.",
     )
 

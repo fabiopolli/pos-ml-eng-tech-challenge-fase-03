@@ -1,20 +1,14 @@
-"""Train, evaluate and serialize the baseline text classifier.
-
-The public entry point is :func:`run_training`, which loads the raw
-``medical_tc_train.csv`` dataset, applies the project preparation
-contract (``triage_ml.data.prepare``), fits a TF-IDF + linear classifier
-pipeline and serializes the artifact under ``models/<version>/``.
-
-The function also generates the figures that back the README and the
-optimization report: confusion matrix and per-class top features.
-"""
+"""Train, evaluate, and serialize the baseline text classifier."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import platform
+import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,21 +19,24 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy
 import seaborn as sns
 import sklearn
 import yaml
 from sklearn.metrics import (
+    balanced_accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
 )
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.pipeline import Pipeline
 
 from triage_ml.data.prepare import prepare_dataset, split_dataset
 from triage_ml.models.artifact import (
     ArtifactPaths,
     build_metadata,
-    validate_metadata,
+    file_sha256,
     write_classes,
     write_metadata,
 )
@@ -53,8 +50,6 @@ DEFAULT_REPORTS_DIR = REPO_ROOT / "reports" / "figures"
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    """Load the YAML configuration that drives ``run_training``."""
-
     with Path(path).open(encoding="utf-8") as handle:
         config = yaml.safe_load(handle)
     if not isinstance(config, dict):
@@ -62,20 +57,110 @@ def load_config(path: Path) -> dict[str, Any]:
     return config
 
 
-def _numpy_version() -> str:
-    return np.__version__
-
-
 def _coerce_tfidf(tfidf: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Convert YAML-friendly values to types accepted by sklearn."""
-
     if not tfidf:
         return tfidf
     coerced = dict(tfidf)
-    ngram = coerced.get("ngram_range")
-    if isinstance(ngram, list):
-        coerced["ngram_range"] = tuple(ngram)
+    if isinstance(coerced.get("ngram_range"), list):
+        coerced["ngram_range"] = tuple(coerced["ngram_range"])
     return coerced
+
+
+def _sha256_json(value: Any) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def dataframe_fingerprint(data: pd.DataFrame) -> str:
+    """Fingerprint ordered rows without persisting their clinical text."""
+
+    digest = hashlib.sha256()
+    for row in data[["text", "target"]].itertuples(index=False):
+        text_digest = hashlib.sha256(str(row.text).encode("utf-8")).hexdigest()
+        digest.update(f"{int(row.target)}:{text_digest}\n".encode())
+    return digest.hexdigest()
+
+
+def _git_state() -> tuple[str, bool]:
+    try:
+        commit_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown", True
+    commit = commit_result.stdout.strip().lower()
+    return (commit if len(commit) == 40 else "unknown", bool(status_result.stdout.strip()))
+
+
+def _model_version(prepared_fingerprint: str, config_fingerprint: str) -> str:
+    input_hash = hashlib.sha256(
+        f"{prepared_fingerprint}:{config_fingerprint}".encode()
+    ).hexdigest()[:12]
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return f"{timestamp}-{input_hash}"
+
+
+def compare_classifiers(
+    train_df: pd.DataFrame,
+    config: dict[str, Any],
+    *,
+    random_state: int,
+    selected_classifier: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Compare candidates only on training folds and fix the final classifier."""
+
+    folds = int(config.get("cv_folds", 5))
+    if folds < 2:
+        raise ValueError("cv_folds must be at least 2")
+    cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
+    scores: dict[str, dict[str, Any]] = {}
+    for name in VALID_CLASSIFIERS:
+        params = dict(config.get(name, {}))
+        params["random_state"] = random_state
+        pipeline = build_pipeline(
+            name,
+            tfidf=_coerce_tfidf(config.get("tfidf")),
+            classifier_kwargs=params,
+        )
+        fold_scores = cross_val_score(
+            pipeline,
+            train_df["text"],
+            train_df["target"],
+            cv=cv,
+            scoring="f1_macro",
+            n_jobs=1,
+        )
+        scores[name] = {
+            "fold_macro_f1": [float(score) for score in fold_scores],
+            "mean_macro_f1": float(fold_scores.mean()),
+            "std_macro_f1": float(fold_scores.std()),
+        }
+
+    best_classifier = max(VALID_CLASSIFIERS, key=lambda name: scores[name]["mean_macro_f1"])
+    chosen = selected_classifier or best_classifier
+    if chosen not in VALID_CLASSIFIERS:
+        raise ValueError(f"Unsupported classifier {chosen!r}; valid: {VALID_CLASSIFIERS}")
+    return chosen, {
+        "metric": "macro_f1",
+        "cv": "StratifiedKFold",
+        "folds": folds,
+        "candidates": scores,
+        "best_classifier": best_classifier,
+        "selected_classifier": chosen,
+        "selection_policy": "explicit_override" if selected_classifier else "highest_mean_macro_f1",
+        "test_set_used_for_selection": False,
+    }
 
 
 def compute_metrics(
@@ -83,18 +168,18 @@ def compute_metrics(
     y_pred: np.ndarray,
     labels: list[int],
 ) -> dict[str, Any]:
-    """Compute accuracy, macro/weighted F1 and a per-class report."""
-
     report = classification_report(y_true, y_pred, labels=labels, output_dict=True, zero_division=0)
-    macro_f1 = f1_score(y_true, y_pred, average="macro", labels=labels, zero_division=0)
-    weighted_f1 = f1_score(y_true, y_pred, average="weighted", labels=labels, zero_division=0)
-    accuracy = float(report["accuracy"])
     return {
-        "accuracy": accuracy,
-        "macro_f1": float(macro_f1),
-        "weighted_f1": float(weighted_f1),
+        "accuracy": float(report["accuracy"]),
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        "macro_f1": float(
+            f1_score(y_true, y_pred, average="macro", labels=labels, zero_division=0)
+        ),
+        "weighted_f1": float(
+            f1_score(y_true, y_pred, average="weighted", labels=labels, zero_division=0)
+        ),
         "per_class": {
-            str(int(label)): {
+            str(label): {
                 "precision": float(report[str(label)]["precision"]),
                 "recall": float(report[str(label)]["recall"]),
                 "f1": float(report[str(label)]["f1-score"]),
@@ -137,27 +222,20 @@ def plot_top_features(
     out_path: Path,
     top_n: int = 12,
 ) -> Path | None:
-    """Plot the top-N coefficients per class for a linear classifier."""
-
     clf = pipeline.named_steps["clf"]
     tfidf: Any = pipeline.named_steps["tfidf"]
-    feature_names = tfidf.get_feature_names_out()
-    classes = list(getattr(clf, "classes_", labels))
-
     if not hasattr(clf, "coef_"):
         return None
-
+    feature_names = tfidf.get_feature_names_out()
+    classes = list(getattr(clf, "classes_", labels))
     fig, axes = plt.subplots(
         nrows=len(classes), ncols=1, figsize=(8, 1.6 * len(classes)), sharex=True
     )
     if len(classes) == 1:
         axes = [axes]
-
-    for ax, cls in zip(axes, classes, strict=False):
-        idx = classes.index(cls)
-        coefs = clf.coef_[idx]
+    for ax, cls, coefs in zip(axes, classes, clf.coef_, strict=True):
         top = np.argsort(coefs)[-top_n:][::-1]
-        tokens = [feature_names[i] for i in top]
+        tokens = [feature_names[index] for index in top]
         scores = coefs[top]
         ax.barh(range(len(tokens))[::-1], scores[::-1], color="steelblue")
         ax.set_yticks(range(len(tokens)))
@@ -180,41 +258,74 @@ def run_training(
     test_size: float | None = None,
     random_state: int | None = None,
 ) -> dict[str, Any]:
-    """Run the full training pipeline and return a summary dictionary."""
+    """Run selection, final evaluation, and immutable artifact persistence."""
 
     config = load_config(Path(config_path))
-    classifier_name = classifier or config["classifier"]
-    if classifier_name not in VALID_CLASSIFIERS:
-        raise ValueError(f"Unsupported classifier {classifier_name!r}; valid: {VALID_CLASSIFIERS}")
-    sample = int(sample_size or config["sample_size"])
-    test_frac = float(test_size or config["test_size"])
-    seed = int(random_state or config["random_state"])
-    model_version = str(config.get("model_version", "v1"))
-    model_name = str(config.get("model_name", "triage_ml_tfidf_logreg"))
+    sample = int(config["sample_size"] if sample_size is None else sample_size)
+    test_frac = float(config["test_size"] if test_size is None else test_size)
+    seed = int(config["random_state"] if random_state is None else random_state)
+    if classifier is not None and classifier not in VALID_CLASSIFIERS:
+        raise ValueError(f"Unsupported classifier {classifier!r}; valid: {VALID_CLASSIFIERS}")
 
+    raw_csv_path = Path(raw_csv_path)
     raw = pd.read_csv(raw_csv_path)
     canonical, report = prepare_dataset(raw, sample_size=sample, random_state=seed)
     train_df, test_df = split_dataset(canonical, test_size=test_frac, random_state=seed)
-    labels = sorted(canonical["target"].unique().tolist())
+    labels = sorted(int(value) for value in canonical["target"].unique())
+    label_mapping = {str(key): str(value) for key, value in config["label_mapping"].items()}
+    if set(label_mapping) != {str(label) for label in labels}:
+        raise ValueError("label_mapping must cover exactly the prepared dataset classes")
 
+    classifier_name, selection = compare_classifiers(
+        train_df,
+        config,
+        random_state=seed,
+        selected_classifier=classifier,
+    )
+    classifier_params = dict(config.get(classifier_name, {}))
+    classifier_params["random_state"] = seed
     pipeline = build_pipeline(
         classifier_name,
         tfidf=_coerce_tfidf(config.get("tfidf")),
-        classifier_kwargs=config.get(classifier_name),
+        classifier_kwargs=classifier_params,
     )
     pipeline.fit(train_df["text"], train_df["target"])
-
     y_pred = pipeline.predict(test_df["text"])
     metrics = compute_metrics(test_df["target"], y_pred, labels)
 
+    effective_config = {
+        **config,
+        "sample_size": sample,
+        "test_size": test_frac,
+        "random_state": seed,
+        "selected_classifier": classifier_name,
+    }
+    config_fingerprint = _sha256_json(effective_config)
+    prepared_fingerprint = dataframe_fingerprint(canonical)
+    fingerprints = {
+        "raw_csv_sha256": file_sha256(raw_csv_path),
+        "prepared_dataset_sha256": prepared_fingerprint,
+        "train_split_sha256": dataframe_fingerprint(train_df),
+        "test_split_sha256": dataframe_fingerprint(test_df),
+        "config_sha256": config_fingerprint,
+    }
+    model_version = _model_version(prepared_fingerprint, config_fingerprint)
     paths = ArtifactPaths.for_version(out_dir, model_version)
     paths.ensure()
     joblib.dump(pipeline, paths.joblib)
     persisted_classes = write_classes(paths.classes, pipeline.classes_)
+    configured_name = str(config.get("model_name", "triage_ml_tfidf_logreg"))
+    model_name = (
+        configured_name if classifier_name == "logreg" else f"triage_ml_tfidf_{classifier_name}"
+    )
+    git_commit, git_dirty = _git_state()
     metadata = build_metadata(
         model_version=model_version,
         model_name=model_name,
-        classes=[int(c) for c in persisted_classes],
+        task_type=str(config["task_type"]),
+        language=str(config["language"]),
+        classes=persisted_classes,
+        label_mapping=label_mapping,
         random_state=seed,
         n_train=len(train_df),
         n_test=len(test_df),
@@ -223,23 +334,30 @@ def run_training(
             "vectorizer": "tfidf",
             "tfidf": config.get("tfidf", {}),
             "classifier": classifier_name,
-            "classifier_params": config.get(classifier_name, {}),
+            "classifier_params": classifier_params,
         },
+        selection=selection,
+        dependency_versions={
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
+        },
+        git_commit=git_commit,
+        git_dirty=git_dirty,
+        fingerprints=fingerprints,
         joblib_path=paths.joblib,
-        sklearn_version=sklearn.__version__,
-        numpy_version=_numpy_version(),
-        python_version=platform.python_version(),
     )
     write_metadata(paths.metadata, metadata)
-    validate_metadata(metadata)
 
     figures_dir = Path(figures_dir)
     figures_dir.mkdir(parents=True, exist_ok=True)
+    suffix = "lr" if classifier_name == "logreg" else classifier_name
     cm_path = plot_confusion_matrix(
-        test_df["target"], y_pred, labels, figures_dir / "08_confusion_matrix_lr.png"
+        test_df["target"], y_pred, labels, figures_dir / f"08_confusion_matrix_{suffix}.png"
     )
-    top_path = plot_top_features(pipeline, labels, figures_dir / "08_top_features_lr.png")
-
+    top_path = plot_top_features(pipeline, labels, figures_dir / f"08_top_features_{suffix}.png")
     return {
         "model_version": model_version,
         "model_name": model_name,
@@ -251,12 +369,14 @@ def run_training(
             "confusion_matrix": str(cm_path),
             "top_features": str(top_path) if top_path else None,
         },
+        "selection": selection,
         "metrics": metrics,
         "n_train": len(train_df),
         "n_test": len(test_df),
         "preparation_report": {
             "input_rows": report.input_rows,
             "missing_or_empty_rows": report.missing_or_empty_rows,
+            "conflicting_texts": report.conflicting_texts,
             "conflicting_rows": report.conflicting_rows,
             "duplicate_rows": report.duplicate_rows,
             "eligible_rows": report.eligible_rows,
@@ -267,8 +387,6 @@ def run_training(
 
 
 def _json_default(obj: Any) -> Any:
-    """JSON serializer fallback for numpy / pandas scalars."""
-
     if hasattr(obj, "item"):
         return obj.item()
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
@@ -280,6 +398,7 @@ def _format_summary(summary: dict[str, Any]) -> str:
         f"version: {summary['model_version']} ({summary['classifier']})\n"
         f"n_train={summary['n_train']} n_test={summary['n_test']}\n"
         f"accuracy={metrics['accuracy']:.4f}\n"
+        f"balanced_accuracy={metrics['balanced_accuracy']:.4f}\n"
         f"macro_f1={metrics['macro_f1']:.4f}\n"
         f"weighted_f1={metrics['weighted_f1']:.4f}\n"
         f"artifact: {summary['paths']['joblib']}\n"
@@ -296,7 +415,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--summary-json", default=None)
     args = parser.parse_args(argv)
-
     summary = run_training(
         raw_csv_path=args.raw_csv,
         out_dir=args.out_dir,
@@ -305,11 +423,15 @@ def main(argv: list[str] | None = None) -> int:
         classifier=args.classifier,
     )
     print(_format_summary(summary), file=sys.stdout)
-    if args.summary_json:
-        Path(args.summary_json).write_text(
-            json.dumps(summary, indent=2, ensure_ascii=False, default=_json_default),
-            encoding="utf-8",
-        )
+    summary_path = (
+        Path(args.summary_json)
+        if args.summary_json
+        else Path(summary["paths"]["metadata"]).with_name("summary.json")
+    )
+    summary_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False, default=_json_default),
+        encoding="utf-8",
+    )
     return 0
 
 

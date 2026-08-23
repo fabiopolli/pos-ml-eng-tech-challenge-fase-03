@@ -48,11 +48,13 @@ DEFAULT_LOGREG: dict[str, Any] = {
     "max_iter": 2000,
     "class_weight": "balanced",
     "C": 1.0,
+    "random_state": 42,
 }
 
 DEFAULT_LINEAR_SVC: dict[str, Any] = {
     "class_weight": "balanced",
     "C": 1.0,
+    "random_state": 42,
 }
 
 

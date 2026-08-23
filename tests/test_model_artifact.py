@@ -1,9 +1,9 @@
-"""Tests for the artifact reader/writer helpers."""
+"""Tests for immutable, validated model artifacts."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from unittest.mock import patch
 
 import joblib
 import pytest
@@ -12,142 +12,187 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
 from triage_ml.models.artifact import (
-    REQUIRED_METADATA_KEYS,
+    ArtifactCompatibilityError,
+    ArtifactIntegrityError,
     ArtifactPaths,
     build_metadata,
     file_sha256,
+    load_artifact,
     read_classes,
     read_metadata,
     validate_metadata,
+    verify_artifact_integrity,
     write_classes,
     write_metadata,
 )
 
+VERSION = "20260823T120000Z-0123456789ab"
+DIGEST = "a" * 64
+
 
 @pytest.fixture()
 def tiny_pipeline() -> Pipeline:
-    pipe = Pipeline(
-        steps=[
-            (
-                "tfidf",
-                TfidfVectorizer(ngram_range=(1, 1), min_df=1, token_pattern=r"(?u)\b\w+\b"),
-            ),
-            ("clf", LogisticRegression(max_iter=200)),
+    pipeline = Pipeline(
+        [
+            ("tfidf", TfidfVectorizer(token_pattern=r"(?u)\b\w+\b")),
+            ("clf", LogisticRegression(max_iter=200, random_state=42)),
         ]
     )
-    pipe.fit(
-        ["liver tumor", "heart attack", "liver metastases"],
-        [1, 4, 1],
-    )
-    return pipe
+    pipeline.fit(["liver tumor", "heart attack", "liver metastases"], [1, 4, 1])
+    return pipeline
 
 
-def test_artifact_paths_layout(tmp_path: Path) -> None:
-    paths = ArtifactPaths.for_version(tmp_path, "v1")
-    assert paths.version_dir == tmp_path / "v1"
-    assert paths.joblib.name == "model.joblib"
-    assert paths.classes.name == "classes.json"
-    assert paths.metadata.name == "metadata.json"
-
-
-def test_artifact_paths_ensure_creates_directory(tmp_path: Path) -> None:
-    paths = ArtifactPaths.for_version(tmp_path, "v2")
-    paths.ensure()
-    assert paths.version_dir.exists()
-
-
-def test_file_sha256_is_stable(tmp_path: Path) -> None:
-    f = tmp_path / "a.txt"
-    f.write_text("hello world", encoding="utf-8")
-    assert file_sha256(f) == file_sha256(f)
-
-
-def test_write_and_read_classes_roundtrip(tmp_path: Path) -> None:
-    path = tmp_path / "classes.json"
-    out = write_classes(path, [1, 4, 2, 3])
-    assert out == [1, 4, 2, 3]
-    assert read_classes(path) == [1, 4, 2, 3]
-
-
-def test_write_classes_coerces_numpy_int(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
-    path = tmp_path / "classes.json"
-    out = write_classes(path, tiny_pipeline.classes_)
-    # Persisted file must contain JSON-native integers, not numpy.int64
-    raw = path.read_text(encoding="utf-8")
-    json.loads(raw)
-    assert all(isinstance(c, int) for c in out)
-
-
-def test_metadata_roundtrip(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
-    paths = ArtifactPaths.for_version(tmp_path, "v1")
-    paths.ensure()
-    joblib.dump(tiny_pipeline, paths.joblib)
-    metadata = build_metadata(
-        model_version="v1",
+def _metadata(joblib_path: Path, pipeline: Pipeline) -> dict[str, object]:
+    return build_metadata(
+        model_version=VERSION,
         model_name="tiny",
-        classes=list(tiny_pipeline.classes_),
+        task_type="multiclass_text_classification",
+        language="en",
+        classes=list(pipeline.classes_),
+        label_mapping={"1": "neoplasms", "4": "cardiovascular diseases"},
         random_state=42,
         n_train=3,
         n_test=1,
-        metrics={"accuracy": 1.0},
-        preprocessing={"vectorizer": "tfidf"},
-        joblib_path=paths.joblib,
-        sklearn_version="1.5.0",
-        numpy_version="1.26.0",
-        python_version="3.12",
+        metrics={
+            "accuracy": 1.0,
+            "balanced_accuracy": 1.0,
+            "macro_f1": 1.0,
+            "weighted_f1": 1.0,
+            "per_class": {
+                label: {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "f1": 1.0,
+                    "support": 1,
+                }
+                for label in ("1", "4")
+            },
+        },
+        preprocessing={
+            "vectorizer": "tfidf",
+            "tfidf": {},
+            "classifier": "logreg",
+            "classifier_params": {},
+        },
+        selection={
+            "metric": "macro_f1",
+            "folds": 2,
+            "candidates": {
+                name: {
+                    "fold_macro_f1": [1.0, 1.0],
+                    "mean_macro_f1": 1.0,
+                    "std_macro_f1": 0.0,
+                }
+                for name in ("logreg", "linear_svc")
+            },
+            "selected_classifier": "logreg",
+            "test_set_used_for_selection": False,
+        },
+        dependency_versions={
+            "python": "3.12",
+            "numpy": "2.0",
+            "scipy": "1.0",
+            "scikit_learn": "1.0",
+            "joblib": "1.0",
+        },
+        git_commit="0" * 40,
+        git_dirty=False,
+        fingerprints={
+            "raw_csv_sha256": DIGEST,
+            "prepared_dataset_sha256": DIGEST,
+            "train_split_sha256": DIGEST,
+            "test_split_sha256": DIGEST,
+            "config_sha256": DIGEST,
+        },
+        joblib_path=joblib_path,
     )
-    write_metadata(paths.metadata, metadata)
-    loaded = read_metadata(paths.metadata)
-    assert loaded == metadata
-    assert loaded["checksum_sha256"] == file_sha256(paths.joblib)
 
 
-def test_validate_metadata_requires_all_keys() -> None:
-    metadata = {"model_version": "v1"}
+def _write_artifact(tmp_path: Path, pipeline: Pipeline) -> ArtifactPaths:
+    paths = ArtifactPaths.for_version(tmp_path, VERSION)
+    paths.ensure()
+    joblib.dump(pipeline, paths.joblib)
+    write_classes(paths.classes, pipeline.classes_)
+    write_metadata(paths.metadata, _metadata(paths.joblib, pipeline))
+    return paths
+
+
+def test_artifact_paths_are_immutable(tmp_path: Path) -> None:
+    paths = ArtifactPaths.for_version(tmp_path, VERSION)
+    paths.ensure()
+    with pytest.raises(FileExistsError):
+        paths.ensure()
+
+
+def test_write_and_read_classes_roundtrip(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
+    path = tmp_path / "classes.json"
+    assert write_classes(path, tiny_pipeline.classes_) == [1, 4]
+    assert read_classes(path) == [1, 4]
+
+
+def test_metadata_roundtrip_and_checksum(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    validate_metadata(metadata)
+    assert metadata["checksum_sha256"] == file_sha256(paths.joblib)
+    assert metadata["label_mapping"] == {"1": "neoplasms", "4": "cardiovascular diseases"}
+
+
+def test_validate_metadata_rejects_incomplete_or_invalid_schema(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    del metadata["fingerprints"]
     with pytest.raises(ValueError, match="missing required keys"):
         validate_metadata(metadata)
 
-
-def test_validate_metadata_accepts_complete_metadata(tmp_path: Path) -> None:
-    paths = ArtifactPaths.for_version(tmp_path, "v1")
-    paths.ensure()
-    (paths.joblib).write_bytes(b"x")
-    metadata = {key: "placeholder" for key in REQUIRED_METADATA_KEYS}
-    metadata["checksum_sha256"] = file_sha256(paths.joblib)
-    validate_metadata(metadata)  # should not raise
+    metadata = read_metadata(paths.metadata)
+    metadata["schema_version"] = 99
+    with pytest.raises(ValueError, match="unsupported"):
+        validate_metadata(metadata)
 
 
-def test_verify_artifact_integrity_passes(tmp_path: Path) -> None:
-    from triage_ml.models.artifact import verify_artifact_integrity
-
-    paths = ArtifactPaths.for_version(tmp_path, "v1")
-    paths.ensure()
-    paths.joblib.write_bytes(b"joblib-binary-blob")
-    metadata = {key: "x" for key in REQUIRED_METADATA_KEYS}
-    metadata["checksum_sha256"] = file_sha256(paths.joblib)
-    verify_artifact_integrity(joblib_path=paths.joblib, metadata=metadata)
+def test_load_artifact_roundtrip_validates_model_classes(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    loaded, metadata = load_artifact(paths.joblib)
+    assert list(loaded.classes_) == metadata["classes"] == [1, 4]
 
 
-def test_verify_artifact_integrity_detects_swap(tmp_path: Path) -> None:
-    from triage_ml.models.artifact import ArtifactIntegrityError, verify_artifact_integrity
-
-    paths = ArtifactPaths.for_version(tmp_path, "v1")
-    paths.ensure()
-    paths.joblib.write_bytes(b"original")
-    metadata = {key: "x" for key in REQUIRED_METADATA_KEYS}
-    metadata["checksum_sha256"] = file_sha256(paths.joblib)
-    # Silent model swap: overwrite the joblib after metadata was written.
-    paths.joblib.write_bytes(b"replaced-by-an-attacker")
-    with pytest.raises(ArtifactIntegrityError, match="checksum mismatch"):
-        verify_artifact_integrity(joblib_path=paths.joblib, metadata=metadata)
+def test_checksum_is_checked_before_joblib_deserialization(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    paths.joblib.write_bytes(b"replaced")
+    with patch("joblib.load") as mocked_load:
+        with pytest.raises(ArtifactIntegrityError, match="checksum mismatch"):
+            load_artifact(paths.joblib)
+    mocked_load.assert_not_called()
 
 
-def test_verify_artifact_integrity_requires_checksum(tmp_path: Path) -> None:
-    from triage_ml.models.artifact import ArtifactIntegrityError, verify_artifact_integrity
+def test_load_artifact_rejects_classes_file_mismatch(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    write_classes(paths.classes, [1, 2])
+    with pytest.raises(ArtifactCompatibilityError, match="classes.json"):
+        load_artifact(paths.joblib)
 
-    paths = ArtifactPaths.for_version(tmp_path, "v1")
-    paths.ensure()
-    paths.joblib.write_bytes(b"x")
-    metadata = {"model_version": "v1"}
-    with pytest.raises(ArtifactIntegrityError, match="missing checksum"):
-        verify_artifact_integrity(joblib_path=paths.joblib, metadata=metadata)
+
+def test_load_artifact_rejects_version_directory_mismatch(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    wrong_dir = tmp_path / "20260823T120001Z-0123456789ab"
+    paths.version_dir.rename(wrong_dir)
+    with pytest.raises(ArtifactCompatibilityError, match="directory"):
+        load_artifact(wrong_dir / "model.joblib")
+
+
+def test_verify_artifact_integrity_requires_valid_checksum(tmp_path: Path) -> None:
+    joblib_path = tmp_path / "model.joblib"
+    joblib_path.write_bytes(b"x")
+    with pytest.raises(ArtifactIntegrityError, match="invalid checksum"):
+        verify_artifact_integrity(joblib_path=joblib_path, metadata={})
