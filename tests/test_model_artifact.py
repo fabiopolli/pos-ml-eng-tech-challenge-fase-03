@@ -191,6 +191,26 @@ def test_load_artifact_rejects_version_directory_mismatch(
         load_artifact(wrong_dir / "model.joblib")
 
 
+def test_load_artifact_rejects_declared_parameter_mismatch(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    metadata["preprocessing"]["tfidf"] = {"min_df": 999}
+    write_metadata(paths.metadata, metadata)
+    with pytest.raises(ArtifactCompatibilityError, match="parameter 'min_df'"):
+        load_artifact(paths.joblib)
+
+
+def test_load_artifact_rejects_symlinked_model(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    real_joblib = paths.joblib.with_name("model-real.joblib")
+    paths.joblib.rename(real_joblib)
+    paths.joblib.symlink_to(real_joblib.name)
+    with pytest.raises(ArtifactCompatibilityError, match="symlinks"):
+        load_artifact(paths.joblib)
+
+
 def test_verify_artifact_integrity_requires_valid_checksum(tmp_path: Path) -> None:
     joblib_path = tmp_path / "model.joblib"
     joblib_path.write_bytes(b"x")

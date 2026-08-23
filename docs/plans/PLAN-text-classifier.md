@@ -32,6 +32,7 @@ A versão anterior deste arquivo cobria apenas a Fase 1 e tratava otimização/o
 - **Sequência de commits estendida** para incluir as entregas da Fase 2.
 - **Revisão técnica de 2026-08-23**: solver multiclasses corrigido, seleção sem uso indevido do teste, contrato de artefato detalhado, testes automatizados da API, benchmark isolado do CI comum e Compose comparativo com duas variantes.
 - **Revisão de 2026-08-23 (model picker)**: novos endpoints `GET /models` e `POST /reload` na API de desenvolvimento (`src/triage_ml/dev_api/app.py`) com `ModelHolder.reload_to` re-validando manifesto + checksum antes do swap. Seção "🔁 Trocar modelo" na sidebar do dashboard consome ambos. Removida a seção "📚 Atalhos" da sidebar e as constantes `DOC_*` correspondentes.
+- **Revisão técnica de robustez (2026-08-23)**: corrigida a semântica do score de idioma com `LanguageIdentifier(norm_probs=True)`; configuração validada no startup; registry unificado e protegido contra symlinks/artefatos incompletos; snapshot consistente do holder sob concorrência; rotas bloqueantes delegadas ao thread pool; publicação do treino feita por staging + rename atômico; CV falha cedo para folds inválidos.
 
 ---
 
@@ -110,11 +111,11 @@ Pontos relevantes de `.agents/contracts/README.md`:
 - **Seleção e avaliação**: Logistic Regression e LinearSVC são comparados somente no treino por validação estratificada. O classificador é fixado antes da avaliação final no teste; a escolha não usa métricas do test set.
 - **Modelo**: recebe lista de textos; devolve classe e score quando disponível. `score` representa confiança do classificador e não deve ser descrito como probabilidade calibrada sem avaliação específica.
 - **Artefato**: `metadata.json` é a fonte canônica para `schema_version`, `model_version`, `task_type`, idioma, classes e nomes, configuração do pipeline, seed, métricas, versões das dependências, commit Git, fingerprints de dataset/splits e checksum de `model.joblib`.
-- **Versão**: `<versão>` segue `YYYYMMDDTHHMMSSZ-<input_hash_curto>`, com hash derivado do dataset preparado e da configuração, e nunca sobrescreve um diretório existente. O carregador aceita apenas artefatos locais/confiáveis e valida schema, classes e checksum antes de desserializar o `joblib`.
+- **Versão**: `<versão>` segue `YYYYMMDDTHHMMSSZ-<input_hash_curto>`, com hash derivado do dataset preparado e da configuração, e nunca sobrescreve um diretório existente. O treino publica por diretório de staging + rename atômico. O carregador aceita apenas artefatos locais/confiáveis e valida schema, classes, estrutura/parâmetros declarados e checksum antes/depois de desserializar o `joblib`.
 - **API (proposta, sujeito à validação de Romário antes de promover)**:
   - `GET /health` → `HealthOut(status, model_version, model_loaded)`.
   - `GET /model-info` → `ModelInfoOut(...)` com o manifesto validado do artefato (503 `model_not_ready` se nada estiver carregado).
-  - `GET /models` → `ModelsListOut(versions, current)` listando as versões imutáveis disponíveis em `models/` (newest-first) + a atualmente em uso.
+  - `GET /models` → `ModelsListOut(versions, current)` listando somente versões completas e íntegras no registry configurado (newest-first) + a atualmente em uso.
   - `POST /reload` → `ReloadIn(model_version)` → `ReloadOut(model_version, model_loaded)`. Troca o holder para a versão solicitada após re-validar manifesto + checksum; erros viram `404 model_not_found` ou `500 model_incompatible` (holder anterior permanece em uso).
   - `POST /predict` → `PredictIn(text)` → `PredictOut(label, label_name, score?, model_version, latency_ms, request_id, warnings)`, com score opcional para classificadores sem `predict_proba`.
   - **Política de idioma** (camada adicional, fora do contrato inicial da Fase 1 mas incorporada em 2026-08-23): `langid` local roda antes do pipeline. Configuração em `configs/api.yaml` (`supported_languages`, `min_text_chars_for_language_check`, `min_language_score`). Rejeições viram `ErrorOut(request_id, error_code="text_too_short_for_language_check"|"indeterminate_language"|"unsupported_language", message, detected_language?, detected_language_score?)` — o `text` nunca aparece na resposta nem em logs.
@@ -190,7 +191,7 @@ Por decisão explícita de Bill em 2026-08-23, o trabalho desta semana será fei
 ### F1.T5. Teste manual e evidências
 - Subir a API local, enviar 5 abstracts (incluindo 1 da classe 1 e 1 da classe 5) via `curl`/`httpie` e salvar somente respostas sanitizadas em `reports/evidence/api-dev.json`; os textos de entrada não são persistidos.
 - Para cada resposta, registrar `request_id`, `label`, `score`, `latency_ms`, headers `X-Request-ID` e `Server-Timing`. Confirmar que `latency_ms` varia entre chamadas.
-- **Cenários da política de idioma**: texto curto (`<20` chars, `error_code=text_too_short_for_language_check`), confiança baixa (mock de `langid.classify` com log-prob saturado, `error_code=indeterminate_language`), idioma fora do allow-list (mock `("pt", -0.1)`, `error_code=unsupported_language`). Cada cenário roda em um `TestClient` isolado com `_strict_lang_config` para forçar o limiar quando necessário.
+- **Cenários da política de idioma**: texto curto (`<20` chars, `error_code=text_too_short_for_language_check`), probabilidade baixa (mock do identificador normalizado com `("en", 0.1)`, `error_code=indeterminate_language`) e idioma fora do allow-list (mock `("pt", 0.9)`, `error_code=unsupported_language`). Cada cenário roda em um `TestClient` isolado com `_strict_lang_config` para forçar o limiar quando necessário.
 - Validar `metadata.json` (chaves, classes, versões).
 - Validar que `text` vazio retorna `422` Pydantic sem vazar conteúdo; `prediction_failed` retorna `ErrorOut` com `request_id`.
 - Confirmar que a evidência versionável não contém os abstracts nem campos `input` do Pydantic, nem o `text` enviado.
@@ -224,7 +225,9 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 | CI quebrando | Fixar versões em `pyproject.toml`/`uv.lock`; preferir libs já presentes |
 | Receber texto em idioma fora do allow-list (pt-BR, por exemplo) | `langid` local com allow-list `{"en"}` configurável em `configs/api.yaml`; rejeição explícita com `error_code` apropriado e `text` nunca exposto na resposta nem em logs |
 | `langid` instável em entradas muito curtas | Mínimo de 20 caracteres (`min_text_chars_for_language_check`) antes do detector; abaixo disso a API rejeita com `text_too_short_for_language_check` |
-| Score de `langid` ser log-probability (negativo) e não probabilidade calibrada | Normalizador `_normalise_score` com saturação em `[-500, 0]` documentado; `min_language_score` é opt-in porque `exp(-200) ≈ 1e-87` |
+| Probabilidade normalizada do `langid` não ser confiança calibrada | Instância própria com `norm_probs=True`; `min_language_score` permanece opt-in e deve ser calibrado em entradas representativas |
+| Treino interrompido deixar a versão mais recente incompleta | Gravação em staging e `rename` atômico somente após manifesto, checksum e figuras serem produzidos |
+| Reload concorrer com predição e misturar pipeline/metadata | Holder publica sob lock e cada request captura um snapshot único; inferência e reload síncronos rodam no thread pool do FastAPI |
 
 ## F1. Sequência de commits (apenas Fase 1)
 
@@ -238,10 +241,10 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 ## F1. Definição de pronto da Fase 1
 
 - Itens da Etapa 2 marcados com evidência no checklist.
-- `uv run pytest` e `uv run ruff check .` verdes (66 testes ao final da revisão de 2026-08-23 — model picker + sidebar limpa).
+- `uv run pytest`, `uv run ruff check .` e `uv run ruff format --check .` verdes (80 testes após a revisão de robustez de 2026-08-23).
 - API sobe com `uvicorn triage_ml.dev_api.app:app` e responde `/health`, `/model-info`, `/models`, `/reload` e `/predict` com o artefato.
-- Dashboard sobe com `streamlit run front/app_dev.py`, lista as versões de `models/`, permite trocar o holder via `POST /reload` e renderiza o manifesto carregado em `🧠 Modelo`.
-- Treino reproduzível a partir de clone limpo, dado o CSV local versionado e o `data/medical_tc_labels.csv` (mapeamento `condition_label → condition_name`).
+- Dashboard sobe com `streamlit run front/app_dev.py`, lista as versões válidas do registry, permite trocar o holder global da API via `POST /reload` e renderiza o manifesto carregado em `🧠 Modelo`.
+- Treino reproduzível a partir de clone limpo após obter o CSV conforme `docs/dataset.md`; o mapeamento `condition_label → condition_name` versionado vem de `configs/training.yaml`.
 - `README.md`, `front/README.md`, `CHECKLIST.md` e `docs/reports/Etapa_2_Modelo_baseline_e_serialização.md` refletem o estado real (model picker + remoção dos Atalhos da sidebar).
 
 ---

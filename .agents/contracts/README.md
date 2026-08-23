@@ -29,7 +29,9 @@ Contrato inicial proposto, sujeito a validação por Romário:
 - `POST /predict`: recebe `{"text": "..."}` e devolve classe, score opcional e versão do modelo;
 - erros de validação não retornam dados internos nem o texto clínico em logs.
 - `MODEL_PATH` aponta para o `model.joblib`; nomes de classes são lidos do manifesto, sem CSV de runtime;
-- respostas de predição expõem `X-Request-ID` e `Server-Timing: predict;dur=<latency_ms>`.
+- `GET /model-info` expõe o manifesto validado; `GET /models` lista somente versões íntegras do mesmo registry; `POST /reload` troca o modelo após nova validação sem publicar estado parcial;
+- respostas de predição expõem `X-Request-ID` e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>`;
+- a checagem local usa `LanguageIdentifier(norm_probs=True)` e a allow-list deve coincidir com o idioma declarado no manifesto.
 
 ## Observabilidade
 

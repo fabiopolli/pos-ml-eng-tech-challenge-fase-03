@@ -135,7 +135,7 @@ O classificador recebe um texto livre (abstract médico) e devolve uma das cinco
 - **Seleção do baseline**: `LogisticRegression` e `LinearSVC`, ambos com `class_weight="balanced"`, são comparados por macro-F1 em validação cruzada estratificada somente no treino. O `LinearSVC` foi selecionado (`0.7335` contra `0.7319`) antes da avaliação final no teste.
 - **Score**: `LinearSVC` não expõe `predict_proba`; por isso a API retorna `score=null` para o artefato selecionado. Um override explícito de Logistic Regression continua disponível para experimentos.
 - **Por que não Random Forest?** O enunciado cita TF-IDF + Random Forest como exemplo. Em TF-IDF, RF explode o custo de inferência (centenas de árvores) sem ganho consistente de F1 sobre modelos lineares em texto. Optamos por um classificador linear, mais alinhado ao requisito de "modelo leve" e à operação real-time da API.
-- **Serialização**: diretórios imutáveis `YYYYMMDDTHHMMSSZ-<input_hash>` com `model.joblib`, `classes.json` e `metadata.json`. O manifesto registra schema, classes e nomes, seleção, versões, commit Git, fingerprints dos dados/splits/configuração e checksum do modelo. O loader valida tudo antes de desserializar o `joblib`.
+- **Serialização**: diretórios imutáveis `YYYYMMDDTHHMMSSZ-<input_hash>` com `model.joblib`, `classes.json` e `metadata.json`, publicados por staging + `rename` atômico. O manifesto registra schema, classes e nomes, seleção, versões, commit Git, fingerprints e checksum. O loader valida manifesto/checksum antes do `joblib` e confere estrutura, parâmetros declarados e classes depois da carga.
 - **Seeds**: 42 em todos os pontos estocásticos.
 
 ### Métricas atuais (recorte preparado, 5.000 amostras, split 80/20)
@@ -172,6 +172,8 @@ Hiperparâmetros editáveis em `configs/training.yaml`.
 
 A API de desenvolvimento fica em [`src/triage_ml/dev_api/`](src/triage_ml/dev_api/) e **consome o modelo real treinado** (`models/<versão>/model.joblib`). Não é um stub. O nome `dev_api` deixa explícito que é uma API de validação local — a API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará o contrato desta.
 
+Execute-a vinculada a localhost e com um único worker. O endpoint administrativo `/reload` não possui autenticação e altera estado apenas no processo que recebeu a chamada; ele não é apropriado para exposição em rede nem execução multiworker.
+
 ```bash
 # Sem MODEL_PATH: a API escolhe automaticamente a versão timestampada mais recente em models/
 PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
@@ -185,8 +187,8 @@ Endpoints:
 
 - `GET /health` → `{"status": "ok|degraded", "model_version": "...", "model_loaded": true|false}`. Se o artefato estiver ausente ou inválido, a aplicação **não sobe** (RuntimeError no startup).
 - `GET /model-info` → manifesto validado do artefato (`model_version`, `model_name`, `task_type`, `language`, `classes`, `label_mapping`, `random_state`, `n_train`, `n_test`, `metrics`, `preprocessing`, `selection`, `dependency_versions`, `git_commit`, `git_dirty`, `created_at`). Retorna `503 model_not_ready` se o artefato não estiver carregado. Permite que ferramentas externas inspecionem o que está em inferência sem tocar o filesystem.
-- `GET /models` → lista de versões imutáveis disponíveis em `models/` (newest-first) + a versão atualmente em uso. Read-only, sem efeito colateral.
-- `POST /reload` → corpo `{"model_version": "YYYYMMDDTHHMMSSZ-<12hex>"}`. Troca o holder da API para a versão solicitada após re-validar manifesto + checksum. Retorna `404 model_not_found` se a versão não existe ou `500 model_incompatible` se a validação falhar (o holder anterior permanece em uso). Habilita o model picker do dashboard.
+- `GET /models` → lista somente versões completas e íntegras no mesmo registry do holder (newest-first) + a versão atualmente em uso. Diretórios incompletos e symlinks são omitidos.
+- `POST /reload` → corpo `{"model_version": "YYYYMMDDTHHMMSSZ-<12hex>"}`. Troca o holder global do processo após re-validar manifesto, checksum, estrutura e classes. A publicação ocorre sob lock e cada predição usa um snapshot consistente. Retorna `404 model_not_found` ou `500 model_incompatible`; o modelo anterior permanece em uso.
 - `POST /predict` → corpo `{"text": "..."}`. Resposta inclui `label`, `label_name`, `score`, `model_version`, `latency_ms`, `request_id` e `warnings`. Erros de validação retornam `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` com HTTP 422 e nunca vazam o texto clínico.
 - Toda resposta de predição traz `X-Request-ID` (gerado internamente) e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo), prontos para a Etapa 6 (Prometheus/Grafana).
 
@@ -202,7 +204,7 @@ Antes de chamar o pipeline, a `/predict` aplica uma política de idioma em três
 | Confiança mínima | `api.min_language_score` (default `0.0`, opt-in) | `error_code=indeterminate_language` |
 | Allow-list de idiomas | `api.supported_languages` (default `["en"]`) | `error_code=unsupported_language` |
 
-O detector é `langid`, roda 100% local, sem rede. O score é normalizado de log-prob (`langid` retorna `log_prob ≤ 0`) para `[0, 1]` com saturação em `[-500, 0]`. O corpo do erro carrega `detected_language` e `detected_language_score` quando disponíveis, mas **nunca** o `text`.
+O detector é `langid`, roda 100% local, sem rede, e usa `LanguageIdentifier(norm_probs=True)`. O valor retornado está em `[0, 1]`, mas não é uma confiança calibrada; qualquer limiar positivo deve ser validado em entradas representativas. A configuração é validada no startup e sua allow-list deve coincidir com o idioma do manifesto. O corpo do erro carrega `detected_language` e `detected_language_score` quando disponíveis, mas **nunca** o `text`.
 
 A API oficial (Docker, auth, métricas Prometheus) é trabalho do Romário (Etapa 3 do checklist); este esqueleto já expõe `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` para acelerar a integração.
 
@@ -214,12 +216,12 @@ Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em 
 
 - **Health** — chama `GET /health` e mostra `status`, `model_version`, `model_loaded`.
 - **Predição** — área de texto + `POST /predict` exibindo `label`, `label_name`, `score`, `latency_ms`, `request_id` e os headers `X-Request-ID` / `Server-Timing`.
-- **Política de idioma** — quatro cenários canônicos (texto curto, confiança baixa, idioma fora do allow-list, inglês válido) com validação automática do `error_code` retornado.
+- **Política de idioma** — três cenários reproduzíveis via HTTP (texto curto, idioma fora do allow-list e inglês válido). Probabilidade baixa é coberta nos testes e no script com detector mockado.
 
 **Sidebar:**
 
 - **Conexão** — URL base da API + botão "Atualizar health".
-- **🔁 Trocar modelo** — consome `GET /models` para listar versões imutáveis disponíveis em `models/`, mostra a versão em uso, deixa selecionar outra via `<selectbox>` e dispara `POST /reload`. Estado apenas em memória.
+- **🔁 Trocar modelo** — consome `GET /models` para listar versões válidas, mostra a versão em uso e dispara `POST /reload`. O picker fica na sessão Streamlit; o reload altera globalmente o processo da API e deve ser usado apenas no ambiente local de desenvolvimento.
 - **🧠 Modelo** — consome `GET /model-info` e exibe, em expanders, a identidade do artefato carregado (`model_version`, `model_name`, `task_type`, `language`), dados de treinamento (`n_train`, `n_test`, `random_state`, `git_commit`, `created_at`, `dependency_versions`), a seleção do classificador (candidatos `logreg` × `linear_svc` com `mean_macro_f1 ± std`) e as métricas (`accuracy`, `balanced_accuracy`, `macro_f1`, `weighted_f1` globais + tabela per-classe com precision/recall/F1/support).
 
 ```bash
@@ -230,14 +232,14 @@ PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 
 uv run streamlit run front/app_dev.py
 ```
 
-O dashboard **não** persiste payloads nem textos; latência, taxa de erro e volume continuam no stack **Prometheus + Grafana** (`monitoring/`). Mais detalhes em [`front/README.md`](front/README.md).
+O dashboard **não** persiste payloads nem textos em disco; valores dos widgets permanecem em memória durante a sessão. Latência, taxa de erro e volume continuam no stack **Prometheus + Grafana** (`monitoring/`). Mais detalhes em [`front/README.md`](front/README.md).
 
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 66 testes do baseline, artefato, treino, API, idioma e dashboard
+uv run pytest             # 80 testes do baseline, artefato, treino, API, idioma e dashboard
 uv run ruff check .       # lint
-uv run ruff format .      # format
+uv run ruff format --check .  # verificação de formatação
 ```
 
 ### Plano de implementação

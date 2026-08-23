@@ -16,8 +16,8 @@ Abas:
      ``POST /predict`` e exibe ``label``/``label_name``/``score``/
      ``latency_ms``/``request_id`` e os headers ``X-Request-ID`` /
      ``Server-Timing``.
-  3. **Política de idioma** — quatro cenários canônicos (texto curto,
-     score baixo, idioma fora do allow-list, sucesso em inglês) com
+   3. **Política de idioma** — três cenários reproduzíveis (texto curto,
+      idioma fora do allow-list, sucesso em inglês) com
      presets prontos para colar payloads e validar a resposta de erro.
 
 Sidebar:
@@ -56,22 +56,11 @@ SUCCESS_STATUS = 200
 # the dashboard is rooted one level under the project tree.
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-LANGUAGE_PRESETS: dict[str, dict[str, str]] = {
+LANGUAGE_PRESETS: dict[str, dict[str, Any]] = {
     "Texto curto (<20 chars)": {
         "expected_error_code": "text_too_short_for_language_check",
         "text": "liver tumor",
         "note": "11 caracteres — o detector nem é chamado; a API rejeita direto.",
-    },
-    "Confiança baixa (mock)": {
-        "expected_error_code": "indeterminate_language",
-        "text": (
-            "The study cohort included patients with mixed-language clinical "
-            "notes that the detector could not classify reliably."
-        ),
-        "note": (
-            "Texto real em inglês; no script de validação a fixture mocka "
-            "``langid`` com log-prob saturado em ``-1000`` (score 0.0)."
-        ),
     },
     "Idioma fora do allow-list": {
         "expected_error_code": "unsupported_language",
@@ -91,7 +80,7 @@ LANGUAGE_PRESETS: dict[str, dict[str, str]] = {
             "that required urgent surgical resection and histopathological "
             "evaluation."
         ),
-        "note": "Texto clínico real do corpus; deve retornar 200 com label_name.",
+        "note": "Texto sintético em inglês; deve retornar 200 com label_name.",
     },
 }
 
@@ -137,10 +126,12 @@ def _request_json(
         json=payload,
         timeout=REQUEST_TIMEOUT_SECONDS,
         headers={"Accept": "application/json"},
+        allow_redirects=False,
     )
     elapsed_ms = response.elapsed.total_seconds() * 1000.0
     try:
-        body = response.json()
+        parsed = response.json()
+        body = parsed if isinstance(parsed, dict) else {"raw_json": parsed}
     except ValueError:
         body = {"raw": response.text}
     return ApiResponse(
@@ -407,6 +398,15 @@ def main() -> None:
             value=DEFAULT_API_URL,
             help="Ex.: http://127.0.0.1:8000 (local), http://api.cloud.run.app",
         )
+        api_url = api_url.rstrip("/")
+        previous_api_url = st.session_state.get("cached_api_url")
+        if previous_api_url != api_url:
+            for key in ("models_payload", "model_info_payload", "model_picker_selection"):
+                st.session_state.pop(key, None)
+            st.session_state["cached_api_url"] = api_url
+            st.session_state["force_models_list"] = True
+            st.session_state["force_model_info"] = True
+            st.session_state["force_health"] = True
         st.caption(
             "Suba a API local com "
             "`PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --reload`."
@@ -419,7 +419,7 @@ def main() -> None:
         st.markdown("### 🔁 Trocar modelo")
         st.caption(
             "Lista as versões imutáveis disponíveis em `models/` e troca "
-            "o holder da API via `POST /reload`. Estado só desta sessão."
+            "o holder global do processo da API via `POST /reload`. Use apenas localmente."
         )
 
         if st.button("🔄 Listar versões", use_container_width=True, key="refresh_models"):
@@ -497,6 +497,7 @@ def main() -> None:
                             st.session_state["force_model_info"] = True
                             st.session_state["force_models_list"] = True
                             st.session_state["force_health"] = True
+                            st.rerun()
                         else:
                             error_code = reload_response.body.get("error_code", "—")
                             st.error(
@@ -552,7 +553,8 @@ def main() -> None:
             "Executa `GET /health` e exibe o resultado. Útil para confirmar "
             "que o artefato subiu e o modelo está carregado."
         )
-        if st.button("Chamar /health", key="call_health"):
+        health_clicked = st.button("Chamar /health", key="call_health")
+        if health_clicked or st.session_state.pop("force_health", False):
             with st.spinner("Chamando /health ..."):
                 try:
                     response = _check_health(api_url)
@@ -614,7 +616,7 @@ def main() -> None:
     with tab_language:
         st.header("🌐 Política de idioma")
         st.markdown(
-            "Quatro cenários canônicos da política de idioma configurada em "
+            "Três cenários reproduzíveis da política de idioma configurada em "
             "`configs/api.yaml` (`supported_languages`, `min_text_chars`, "
             "`min_language_score`). Selecione um preset, ajuste o texto se "
             "quiser e dispare."
@@ -643,7 +645,7 @@ def main() -> None:
 
     st.markdown("---")
     st.caption(
-        "Dev dashboard v1 · triage_ml · sem persistência de payloads. "
+        "Dev dashboard v1 · triage_ml · sem persistência de payloads em disco. "
         "Latência, taxa de erro e volume pertencem ao Prometheus/Grafana; "
         "informações do modelo carregado ficam na sidebar via /model-info."
     )

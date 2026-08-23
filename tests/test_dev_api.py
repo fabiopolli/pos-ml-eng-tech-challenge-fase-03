@@ -180,7 +180,7 @@ def test_client_request_id_is_never_trusted(
     assert response.json()["request_id"] != client_supplied
 
 
-@pytest.mark.parametrize("payload", [{"text": ""}, {"text": "   \n\t"}, {}])
+@pytest.mark.parametrize("payload", [{"text": ""}, {"text": "   \n\t"}, {"text": "x" * 20_001}, {}])
 def test_invalid_text_returns_sanitized_422(client: TestClient, payload: dict[str, str]) -> None:
     sentinel = payload.get("text", "missing-sentinel")
     response = client.post("/predict", json=payload)
@@ -347,7 +347,7 @@ def test_list_models_when_models_dir_missing(
     empty_root.mkdir()
     monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", empty_root)
     holder_path = _artifact(tmp_path / "models", version=VERSION)
-    holder = ModelHolder(holder_path)
+    holder = ModelHolder(holder_path, registry_root=empty_root / "models")
     with TestClient(create_app(holder=holder)) as test_client:
         response = test_client.get("/models")
     assert response.status_code == 200
@@ -356,6 +356,25 @@ def test_list_models_when_models_dir_missing(
     # The holder still reports its loaded version even if the directory
     # disappeared afterwards — useful for surfacing state to the client.
     assert body["current"] == VERSION
+
+
+def test_list_models_omits_incomplete_artifacts(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    holder_path = _artifact(models_dir, version=VERSION)
+    invalid_dir = models_dir / VERSION_B
+    invalid_dir.mkdir()
+    (invalid_dir / "model.joblib").write_bytes(b"incomplete")
+    holder = ModelHolder(holder_path)
+    with TestClient(create_app(holder=holder)) as test_client:
+        response = test_client.get("/models")
+    assert response.json()["versions"] == [VERSION]
+
+
+def test_unknown_route_uses_sanitized_error_contract(client: TestClient) -> None:
+    response = client.get("/does-not-exist")
+    assert response.status_code == 404
+    assert response.json()["error_code"] == "request_failed"
+    assert response.headers["x-request-id"] == response.json()["request_id"]
 
 
 def test_reload_swaps_holder_and_health_reflects_new_version(
@@ -383,6 +402,34 @@ def test_reload_swaps_holder_and_health_reflects_new_version(
         # ``/model-info`` must agree with the new holder state.
         info = test_client.get("/model-info").json()
         assert info["model_version"] == VERSION_B
+
+
+def test_prediction_uses_one_holder_snapshot_during_reload(tmp_path: Path) -> None:
+    models_dir = tmp_path / "models"
+    holder_path = _artifact(models_dir, version=VERSION)
+    _artifact(models_dir, version=VERSION_B)
+    holder = ModelHolder(holder_path)
+
+    class ReloadingPipeline:
+        def predict(self, _: list[str]) -> list[int]:
+            holder.reload_to(VERSION_B)
+            return [1]
+
+    with TestClient(create_app(holder=holder)) as test_client:
+        holder.pipeline = ReloadingPipeline()
+        response = test_client.post(
+            "/predict",
+            json={
+                "text": (
+                    "We report a patient with an aggressive liver tumor requiring "
+                    "surgical resection and histopathological evaluation."
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["model_version"] == VERSION
+    assert holder.model_version == VERSION_B
 
 
 def test_reload_returns_404_for_unknown_version(

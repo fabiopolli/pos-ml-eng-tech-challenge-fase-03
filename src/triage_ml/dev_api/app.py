@@ -9,7 +9,8 @@ before the official API from Romário (Etapa 3 of the checklist) ships.
 It is **not** a stub, **not** a fake, and **not** production-ready: it
 has no auth, no rate limit, no Prometheus instrumentation and no
 Docker packaging. Treat it as a thin, well-tested seam around the
-artifact contract.
+artifact contract. Bind it to localhost and run one worker: reload state
+is process-local and deliberately has no production coordination.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -26,6 +28,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from triage_ml.dev_api.config import get_api_config
 from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
@@ -39,7 +42,12 @@ from triage_ml.dev_api.schemas import (
     ReloadIn,
     ReloadOut,
 )
-from triage_ml.models.artifact import load_artifact
+from triage_ml.models.artifact import (
+    load_artifact,
+    read_metadata,
+    validate_metadata,
+    verify_artifact_integrity,
+)
 
 logger = logging.getLogger("triage_ml.dev_api")
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -48,24 +56,41 @@ VERSION_DIR_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}$")
 
 def _default_model_path() -> Path:
     models_dir = REPO_ROOT / "models"
-    versioned = (
-        sorted(
-            (
-                path / "model.joblib"
-                for path in models_dir.iterdir()
-                if path.is_dir() and VERSION_DIR_PATTERN.fullmatch(path.name)
-            ),
-            reverse=True,
-        )
-        if models_dir.exists()
-        else []
-    )
-    if versioned:
-        return versioned[0]
+    versions = _list_model_versions(models_dir)
+    if versions:
+        return models_dir / versions[0] / "model.joblib"
     return models_dir / "v1" / "model.joblib"
 
 
-def _list_model_versions() -> list[str]:
+def _validated_model_path(models_dir: Path, version: str) -> Path:
+    """Resolve a complete artifact without allowing registry symlink escapes."""
+
+    if not VERSION_DIR_PATTERN.fullmatch(version):
+        raise FileNotFoundError(f"unknown model version: {version!r}")
+    root = models_dir.resolve()
+    version_dir = models_dir / version
+    joblib_path = version_dir / "model.joblib"
+    metadata_path = version_dir / "metadata.json"
+    if (
+        version_dir.is_symlink()
+        or joblib_path.is_symlink()
+        or metadata_path.is_symlink()
+        or not joblib_path.is_file()
+        or not metadata_path.is_file()
+    ):
+        raise FileNotFoundError(f"unknown model version: {version!r}")
+    resolved_joblib = joblib_path.resolve()
+    if not resolved_joblib.is_relative_to(root):
+        raise FileNotFoundError(f"unknown model version: {version!r}")
+    metadata = read_metadata(metadata_path)
+    validate_metadata(metadata)
+    if metadata["model_version"] != version:
+        raise RuntimeError("artifact directory does not match metadata.model_version")
+    verify_artifact_integrity(joblib_path=resolved_joblib, metadata=metadata)
+    return resolved_joblib
+
+
+def _list_model_versions(models_dir: Path | None = None) -> list[str]:
     """Return all immutable artifact versions available under ``models/``.
 
     The listing is ordered newest-first (matching ``_default_model_path``)
@@ -74,48 +99,50 @@ def _list_model_versions() -> list[str]:
     model-picker and for the ``GET /models`` endpoint.
     """
 
-    models_dir = REPO_ROOT / "models"
+    models_dir = models_dir or REPO_ROOT / "models"
     if not models_dir.exists():
         return []
-    return sorted(
-        (
-            path.name
-            for path in models_dir.iterdir()
-            if path.is_dir() and VERSION_DIR_PATTERN.fullmatch(path.name)
-        ),
-        reverse=True,
-    )
+    versions: list[str] = []
+    for path in models_dir.iterdir():
+        if path.is_symlink() or not path.is_dir() or not VERSION_DIR_PATTERN.fullmatch(path.name):
+            continue
+        try:
+            _validated_model_path(models_dir, path.name)
+        except (OSError, ValueError, RuntimeError):
+            continue
+        versions.append(path.name)
+    return sorted(versions, reverse=True)
 
 
 class ModelHolder:
     """Load and publish a model only after full artifact validation."""
 
-    def __init__(self, model_path: str | Path) -> None:
+    def __init__(self, model_path: str | Path, *, registry_root: str | Path | None = None) -> None:
         self.model_path = Path(model_path)
+        self.registry_root = Path(registry_root) if registry_root else self.model_path.parent.parent
         self.pipeline: Any = None
         self.metadata: dict[str, Any] = {}
         self.label_names: dict[int, str] = {}
         self.model_version: str | None = None
+        self._lock = threading.RLock()
 
     def load(self) -> None:
-        self.pipeline = None
-        self.metadata = {}
-        self.label_names = {}
-        self.model_version = None
         try:
             pipeline, metadata = load_artifact(self.model_path)
         except Exception as exc:
             logger.error("model startup validation failed")
             raise RuntimeError("model artifact is missing or incompatible") from exc
-        self.metadata = metadata
-        self.label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
-        self.model_version = metadata["model_version"]
-        self.pipeline = pipeline
+        label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
+        with self._lock:
+            self.pipeline = pipeline
+            self.metadata = metadata
+            self.label_names = label_names
+            self.model_version = metadata["model_version"]
 
     def reload_to(self, version: str) -> None:
         """Atomically swap the holder to a different immutable artifact version.
 
-        The new path is resolved against the ``models/`` directory and
+        The new path is resolved against the holder's registry root and
         must obey ``VERSION_DIR_PATTERN``; ``load_artifact`` re-runs the
         full validation (manifest, checksum, classes) before the swap
         actually commits, so the holder never observes a half-loaded
@@ -126,21 +153,28 @@ class ModelHolder:
 
         if not VERSION_DIR_PATTERN.fullmatch(version):
             raise FileNotFoundError(f"unknown model version: {version!r}")
-        new_path = REPO_ROOT / "models" / version / "model.joblib"
-        if not new_path.is_file():
-            raise FileNotFoundError(f"unknown model version: {version!r}")
+        new_path = _validated_model_path(self.registry_root, version)
         # ``load_artifact`` is responsible for the validation; on success
         # it returns the pipeline + metadata we need to publish.
         pipeline, metadata = load_artifact(new_path)
-        self.pipeline = pipeline
-        self.metadata = metadata
-        self.label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
-        self.model_version = metadata["model_version"]
-        self.model_path = new_path
+        label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
+        with self._lock:
+            self.pipeline = pipeline
+            self.metadata = metadata
+            self.label_names = label_names
+            self.model_version = metadata["model_version"]
+            self.model_path = new_path
+
+    def snapshot(self) -> tuple[Any, dict[str, Any], dict[int, str], str | None]:
+        """Return one consistent model state for the duration of a request."""
+
+        with self._lock:
+            return self.pipeline, self.metadata, self.label_names, self.model_version
 
     @property
     def loaded(self) -> bool:
-        return self.pipeline is not None
+        with self._lock:
+            return self.pipeline is not None
 
 
 def _request_id() -> str:
@@ -163,6 +197,10 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         holder.load()
+        api_config = get_api_config()
+        _, metadata, _, _ = holder.snapshot()
+        if metadata and api_config.supported_languages != {metadata["language"]}:
+            raise RuntimeError("API supported languages must match the loaded model language")
         yield
 
     app = FastAPI(title="triage_ml dev API", lifespan=lifespan)
@@ -195,8 +233,8 @@ def create_app(
         ).model_dump()
         return JSONResponse(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, content=body)
 
-    @app.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException):
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         request_id = getattr(request.state, "request_id", None)
         language_codes = {
             "unsupported_language",
@@ -235,7 +273,8 @@ def create_app(
     @app.exception_handler(Exception)
     async def unexpected_exception_handler(request: Request, _: Exception):
         request_id = getattr(request.state, "request_id", None)
-        latency_ms = (time.perf_counter() - request.state.started_at) * 1000.0
+        started_at = getattr(request.state, "started_at", time.perf_counter())
+        latency_ms = (time.perf_counter() - started_at) * 1000.0
         logger.error(
             "request failed (rid=%s route=%s status=500 latency_ms=%.3f)",
             request_id,
@@ -251,14 +290,16 @@ def create_app(
 
     @app.get("/health", response_model=HealthOut)
     async def health() -> HealthOut:
+        pipeline, _, _, model_version = holder.snapshot()
+        model_loaded = pipeline is not None
         return HealthOut(
-            status="ok" if holder.loaded else "degraded",
-            model_version=holder.model_version,
-            model_loaded=holder.loaded,
+            status="ok" if model_loaded else "degraded",
+            model_version=model_version,
+            model_loaded=model_loaded,
         )
 
     @app.get("/models", response_model=ModelsListOut)
-    async def list_models() -> ModelsListOut:
+    def list_models() -> ModelsListOut:
         """List every immutable artifact version available under ``models/``.
 
         Pure read-only endpoint — does not touch the loaded pipeline.
@@ -266,7 +307,10 @@ def create_app(
         loaded version so the dashboard can preselect it in a picker.
         """
 
-        return ModelsListOut(versions=_list_model_versions(), current=holder.model_version)
+        _, _, _, model_version = holder.snapshot()
+        return ModelsListOut(
+            versions=_list_model_versions(holder.registry_root), current=model_version
+        )
 
     @app.get("/model-info", response_model=ModelInfoOut)
     async def model_info() -> ModelInfoOut:
@@ -279,15 +323,16 @@ def create_app(
         ``503 model_not_ready`` when the model is not loaded.
         """
 
-        if not holder.loaded:
+        pipeline, metadata, _, _ = holder.snapshot()
+        if pipeline is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="model_not_ready",
             )
-        return ModelInfoOut(**holder.metadata)
+        return ModelInfoOut(**metadata)
 
     @app.post("/reload", response_model=ReloadOut)
-    async def reload_model(payload: ReloadIn) -> ReloadOut:
+    def reload_model(payload: ReloadIn) -> ReloadOut:
         """Swap the holder to a different validated artifact version.
 
         Body: ``{"model_version": "YYYYMMDDTHHMMSSZ-<12hex>"}``. The new
@@ -311,22 +356,21 @@ def create_app(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="model_not_found",
             ) from exc
-        except (
-            RuntimeError,
-            Exception,
-        ) as exc:  # ``load_artifact`` raises multiple exception types
-            logger.error("model reload to %s failed: %s", version, exc)
+        except Exception as exc:  # ``load_artifact`` raises multiple exception types
+            logger.error("model reload to %s failed (%s)", version, type(exc).__name__)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="model_incompatible",
             ) from exc
-        logger.info("model reload to %s succeeded", holder.model_version)
-        return ReloadOut(model_version=holder.model_version or "", model_loaded=holder.loaded)
+        _, _, _, model_version = holder.snapshot()
+        logger.info("model reload to %s succeeded", model_version)
+        return ReloadOut(model_version=model_version or "", model_loaded=holder.loaded)
 
     @app.post("/predict", response_model=PredictOut)
-    async def predict(payload: PredictIn, request: Request) -> PredictOut:
+    def predict(payload: PredictIn, request: Request) -> PredictOut:
         request_id: str = request.state.request_id
-        if not holder.loaded:
+        pipeline, metadata, label_names, model_version = holder.snapshot()
+        if pipeline is None:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="model_not_ready",
@@ -340,6 +384,11 @@ def create_app(
             )
 
         api_config = get_api_config()
+        if api_config.supported_languages != {metadata["language"]}:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="language_config_incompatible",
+            )
         detect_started = time.perf_counter()
         try:
             detect_language(
@@ -370,11 +419,11 @@ def create_app(
 
         started = time.perf_counter()
         try:
-            label = int(holder.pipeline.predict([text])[0])
+            label = int(pipeline.predict([text])[0])
             score: float | None = None
-            if hasattr(holder.pipeline, "predict_proba"):
-                proba = holder.pipeline.predict_proba([text])[0]
-                index = list(holder.pipeline.classes_).index(label)
+            if hasattr(pipeline, "predict_proba"):
+                proba = pipeline.predict_proba([text])[0]
+                index = list(pipeline.classes_).index(label)
                 score = float(proba[index])
         except Exception as exc:
             request.state.predict_latency_ms = (time.perf_counter() - started) * 1000.0
@@ -392,9 +441,9 @@ def create_app(
 
         return PredictOut(
             label=label,
-            label_name=holder.label_names[label],
+            label_name=label_names[label],
             score=score,
-            model_version=holder.model_version or "unknown",
+            model_version=model_version or "unknown",
             latency_ms=request.state.predict_latency_ms,
             request_id=request_id,
             warnings=warnings,

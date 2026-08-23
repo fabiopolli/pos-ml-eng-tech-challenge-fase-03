@@ -82,3 +82,7 @@ def test_run_training_records_selection_metrics_and_fingerprints(
     }
     pipeline, loaded_metadata = load_artifact(summary["paths"]["joblib"])
     assert list(pipeline.classes_) == loaded_metadata["classes"] == [1, 2, 3, 4, 5]
+    assert loaded_metadata["preprocessing"]["tfidf"]["sublinear_tf"] is True
+    assert loaded_metadata["preprocessing"]["classifier_params"]["random_state"] == 42
+    version_dirs = list((tmp_path / "models").iterdir())
+    assert version_dirs == [Path(summary["paths"]["joblib"]).parent]

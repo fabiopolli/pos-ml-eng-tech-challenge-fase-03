@@ -4,6 +4,9 @@ Ferramentas de interface voltadas para o desenvolvedor. Não fazem parte
 do runtime da API; existem apenas para acelerar validações manuais da
 API de desenvolvimento (`src/triage_ml/dev_api/`).
 
+Use o dashboard somente em localhost. Ele aceita uma URL informada pelo
+usuário e envia textos para esse destino; não é uma interface pública.
+
 ## `app_dev.py`
 
 Dashboard Streamlit (tema dark premium fixo via CSS) que fala HTTP
@@ -18,27 +21,25 @@ três abas + uma sidebar fixa:
 2. **🎯 Predição** — área de texto + `POST /predict` com leitura completa
    do body, `latency_ms`, `request_id` e os headers `X-Request-ID` /
    `Server-Timing`. Mostra também `label`, `label_name` e `score`
-   quando a API devolve o array de classes (`LinearSVC` → `score=null`).
-3. **🌐 Política de idioma** — quatro cenários canônicos da política
-   definida em `configs/api.yaml` (texto curto, confiança baixa,
-   idioma fora do allow-list, inglês válido) com validação automática
-   do `error_code` retornado pela API. Os cenários embutidos
-   (EN/CURTO/BAIXA/PT) moram em `LANGUAGE_PRESETS`.
+   quando a API devolve o label escalar (`LinearSVC` → `score=null`).
+3. **🌐 Política de idioma** — três cenários reproduzíveis da política
+   definida em `configs/api.yaml` (texto curto, idioma fora do allow-list
+   e inglês válido) com validação automática do `error_code`. O branch de
+   probabilidade baixa exige mock no processo da API e fica nos testes/script.
 
 **Sidebar**:
 
 - **🔌 Conexão** — URL base da API + botão "Atualizar health" para
-  revalidar `/health` sem reiniciar o Streamlit. O campo aceita
-  qualquer URL (local, container, cloud) — `Path.as_uri()` /
-  `requests` resolvem o resto.
+  revalidar `/health` sem reiniciar o Streamlit. A troca de URL limpa
+  os caches de modelos/manifesto, e requests não seguem redirects.
 - **🔁 Trocar modelo** — consome `GET /models` para listar as versões
   imutáveis disponíveis em `models/` (newest-first), mostra a versão
   atualmente em uso, deixa você escolher outra via `<selectbox>` (com
   default = versão corrente) e dispara `POST /reload`. Resposta
   bem-sucedida força o refresh dos blocos abaixo; resposta `404
   model_not_found` ou `500 model_incompatible` mostra o erro em
-  vermelho sem alterar o holder. Estado apenas em memória — não
-  persiste em arquivo nem entre sessões Streamlit.
+  vermelho sem alterar o holder. O picker fica em memória na sessão,
+  mas o reload altera o holder global do processo da API; use apenas localmente.
 - **🧠 Modelo** — consome `GET /model-info` e mostra, em cinco
   expanders:
   - **Identidade** — `model_version`, `model_name`, `task_type`, `language`.
@@ -82,7 +83,7 @@ Acesse `http://localhost:8501`.
 - Avaliação do modelo → notebooks `01_eda.ipynb` / `02_model_baseline.ipynb`
   e `docs/reports/Etapa_2_Modelo_baseline_e_serialização.md`.
 - Privacidade clínica → o dashboard não armazena payloads nem textos
-  em disco. O estado do picker vive só em `st.session_state`.
+  em disco; widgets ainda mantêm seus valores em memória durante a sessão.
 - Persistência entre sessões — o model picker é por-design em
   memória; ao reiniciar o Streamlit, a escolha volta ao default
   (versão atualmente em uso na API).

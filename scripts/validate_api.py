@@ -12,6 +12,7 @@ that no clinical text ever appears in version control.
 from __future__ import annotations
 
 import json
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -49,6 +50,34 @@ LANG_FIXTURES = {
 }
 
 
+def _require_error(response, *, status_code: int, error_code: str) -> None:
+    body = response.json()
+    if response.status_code != status_code or body.get("error_code") != error_code:
+        raise RuntimeError(
+            f"expected HTTP {status_code} {error_code}, got "
+            f"HTTP {response.status_code} {body.get('error_code')}"
+        )
+
+
+def _assert_sanitized(value: object) -> None:
+    serialized = json.dumps(value, ensure_ascii=False)
+    forbidden_values = [*FIXTURES, *LANG_FIXTURES.values()]
+    if any(text in serialized for text in forbidden_values):
+        raise RuntimeError("evidence contains an input fixture")
+
+    def has_forbidden_key(item: object) -> bool:
+        if isinstance(item, dict):
+            return any(
+                key in {"text", "input"} or has_forbidden_key(child) for key, child in item.items()
+            )
+        if isinstance(item, list):
+            return any(has_forbidden_key(child) for child in item)
+        return False
+
+    if has_forbidden_key(value):
+        raise RuntimeError("evidence contains a forbidden input field")
+
+
 @contextmanager
 def _strict_lang_config():
     """Temporarily raise ``min_language_score`` so the indeterminate branch triggers."""
@@ -71,6 +100,11 @@ def _run_language_checks(client: TestClient) -> list[dict[str, object]]:
     records: list[dict[str, object]] = []
 
     short_resp = client.post("/predict", json={"text": LANG_FIXTURES["short_text"]})
+    _require_error(
+        short_resp,
+        status_code=422,
+        error_code="text_too_short_for_language_check",
+    )
     records.append(
         {
             "scenario": "short_text",
@@ -80,12 +114,15 @@ def _run_language_checks(client: TestClient) -> list[dict[str, object]]:
         }
     )
 
-    # ``-1000`` saturates the normaliser to 0.0, which is below the
-    # 0.5 threshold patched in by ``_strict_lang_config``.
-    with patch.object(api_language.langid, "classify", return_value=("en", -1000.0)):
+    with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("en", 0.1)):
         indeterminate_resp = client.post(
             "/predict", json={"text": LANG_FIXTURES["indeterminate_text"]}
         )
+    _require_error(
+        indeterminate_resp,
+        status_code=422,
+        error_code="indeterminate_language",
+    )
     records.append(
         {
             "scenario": "indeterminate_language",
@@ -95,12 +132,15 @@ def _run_language_checks(client: TestClient) -> list[dict[str, object]]:
         }
     )
 
-    # ``-0.1`` normalises to ``exp(-0.1) ≈ 0.905``, which clears the strict
-    # ``min_score = 0.5`` gate. The detector still classifies the text as
-    # Portuguese — outside the ``{"en"}`` allow-list — so the policy must
-    # raise ``unsupported_language``.
-    with patch.object(api_language.langid, "classify", return_value=("pt", -0.1)):
+    # The normalized probability clears the strict threshold, but Portuguese
+    # remains outside the configured allow-list.
+    with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("pt", 0.9)):
         unsupported_resp = client.post("/predict", json={"text": LANG_FIXTURES["unsupported_text"]})
+    _require_error(
+        unsupported_resp,
+        status_code=422,
+        error_code="unsupported_language",
+    )
     records.append(
         {
             "scenario": "unsupported_language",
@@ -135,6 +175,11 @@ def main() -> int:
             resp = client.post("/predict", json={"text": text})
             resp.raise_for_status()
             payload = resp.json()
+            if payload.get("request_id") != resp.headers.get("x-request-id"):
+                raise RuntimeError("prediction request ID does not match X-Request-ID")
+            timing = resp.headers.get("server-timing", "")
+            if "detect;dur=" not in timing or "predict;dur=" not in timing:
+                raise RuntimeError("prediction response is missing Server-Timing stages")
             predict_records.append(
                 {
                     "label": payload.get("label"),
@@ -162,15 +207,24 @@ def main() -> int:
         models_resp.raise_for_status()
         models_body = models_resp.json()
 
-        reload_success_resp = client.post(
-            "/reload", json={"model_version": models_body["versions"][0]}
+        reload_target = next(
+            (
+                version
+                for version in models_body["versions"]
+                if version != models_body.get("current")
+            ),
+            None,
         )
-        if reload_success_resp.status_code != 200:
-            raise RuntimeError(
-                f"reload to first available version returned HTTP "
-                f"{reload_success_resp.status_code}, expected 200"
-            )
-        reload_success_body = reload_success_resp.json()
+        if reload_target is None:
+            reload_success_body = {"skipped": "no alternate valid model version"}
+        else:
+            reload_success_resp = client.post("/reload", json={"model_version": reload_target})
+            if reload_success_resp.status_code != 200:
+                raise RuntimeError(
+                    f"reload to alternate version returned HTTP "
+                    f"{reload_success_resp.status_code}, expected 200"
+                )
+            reload_success_body = reload_success_resp.json()
 
         reload_not_found_resp = client.post(
             "/reload",
@@ -183,10 +237,8 @@ def main() -> int:
             )
         reload_not_found_body = reload_not_found_resp.json()
 
-    # Strict-mode run: the actual langid scores for natural English
-    # text are very low (per-token log probabilities), so we only raise
-    # the bar inside the language-check section, where the detector is
-    # mocked to a saturating -1000 log-prob.
+    # Strict-mode run uses deterministic normalized probabilities so both
+    # policy rejection branches remain reproducible.
     with _strict_lang_config(), TestClient(app_module.app) as strict_client:
         language_records = _run_language_checks(strict_client)
 
@@ -219,7 +271,19 @@ def main() -> int:
         "language_checks": language_records,
         "empty_text_request": empty_record,
     }
-    EVIDENCE_FILE.write_text(json.dumps(evidence, indent=2, ensure_ascii=False), encoding="utf-8")
+    _assert_sanitized(evidence)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        dir=EVIDENCE_DIR,
+        prefix=".api-dev-",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        temporary_path = Path(handle.name)
+        json.dump(evidence, handle, indent=2, ensure_ascii=False)
+        handle.write("\n")
+    temporary_path.replace(EVIDENCE_FILE)
     print(f"health: {health_body}")
     print(f"wrote {EVIDENCE_FILE} ({EVIDENCE_FILE.stat().st_size} bytes)")
     return 0

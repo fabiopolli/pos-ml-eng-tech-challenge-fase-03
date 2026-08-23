@@ -27,17 +27,16 @@
   "models": {
     "versions": [
       "20260823T135811Z-bed2194376bc",
-      "20260823T134214Z-bed2194376bc",
-      "20260823T133941Z-8b0f6eb4e39a"
+      "20260823T134214Z-bed2194376bc"
     ],
     "current": "20260823T135811Z-bed2194376bc"
   },
   "reload_success": {
-    "model_version": "20260823T135811Z-bed2194376bc",
+    "model_version": "20260823T134214Z-bed2194376bc",
     "model_loaded": true
   },
   "reload_not_found": {
-    "request_id": "2ef5ac53400f",
+    "request_id": "d642021b7d65",
     "error_code": "model_not_found",
     "message": "Requested model version was not found under models/.",
     "detected_language": null,
@@ -49,55 +48,55 @@
       "label_name": "neoplasms",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 8.983466000245244,
-      "request_id": "be84e0e87af2",
+      "latency_ms": 13.871218000531371,
+      "request_id": "f9e968d4ade6",
       "warnings": [],
-      "headers_x_request_id": "be84e0e87af2",
-      "header_server_timing": "detect;dur=909.192, predict;dur=8.983"
+      "headers_x_request_id": "f9e968d4ade6",
+      "header_server_timing": "detect;dur=6.372, predict;dur=13.871"
     },
     {
       "label": 4,
       "label_name": "cardiovascular diseases",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.8194069996534381,
-      "request_id": "38356ecbf707",
+      "latency_ms": 1.0752369998954237,
+      "request_id": "4a333e3ef2e0",
       "warnings": [],
-      "headers_x_request_id": "38356ecbf707",
-      "header_server_timing": "detect;dur=0.583, predict;dur=0.819"
+      "headers_x_request_id": "4a333e3ef2e0",
+      "header_server_timing": "detect;dur=4.206, predict;dur=1.075"
     },
     {
       "label": 1,
       "label_name": "neoplasms",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.715849000698654,
-      "request_id": "bb8da31d2d6d",
+      "latency_ms": 0.9716280001157429,
+      "request_id": "a300080238fd",
       "warnings": [],
-      "headers_x_request_id": "bb8da31d2d6d",
-      "header_server_timing": "detect;dur=0.467, predict;dur=0.716"
+      "headers_x_request_id": "a300080238fd",
+      "header_server_timing": "detect;dur=3.226, predict;dur=0.972"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.619485000243003,
-      "request_id": "c44cf04ad7bf",
+      "latency_ms": 1.1610809997364413,
+      "request_id": "92b9d5e291cf",
       "warnings": [],
-      "headers_x_request_id": "c44cf04ad7bf",
-      "header_server_timing": "detect;dur=0.467, predict;dur=0.619"
+      "headers_x_request_id": "92b9d5e291cf",
+      "header_server_timing": "detect;dur=3.560, predict;dur=1.161"
     },
     {
       "label": 5,
       "label_name": "general pathological conditions",
       "score": null,
       "model_version": "20260823T135811Z-bed2194376bc",
-      "latency_ms": 0.6166789999042521,
-      "request_id": "f8d79de50236",
+      "latency_ms": 1.0879920000661514,
+      "request_id": "c9a5522b1764",
       "warnings": [],
-      "headers_x_request_id": "f8d79de50236",
-      "header_server_timing": "detect;dur=0.456, predict;dur=0.617"
+      "headers_x_request_id": "c9a5522b1764",
+      "header_server_timing": "detect;dur=6.060, predict;dur=1.088"
     }
   ],
   "language_checks": [
@@ -105,7 +104,7 @@
       "scenario": "short_text",
       "status_code": 422,
       "body": {
-        "request_id": "3833dfee83d7",
+        "request_id": "fddcc4635421",
         "error_code": "text_too_short_for_language_check",
         "message": "Only English texts are supported.",
         "detected_language": null,
@@ -117,36 +116,36 @@
       "scenario": "indeterminate_language",
       "status_code": 422,
       "body": {
-        "request_id": "ec8f50bc9eb5",
+        "request_id": "35b444e46c8d",
         "error_code": "indeterminate_language",
         "message": "Only English texts are supported.",
         "detected_language": "en",
-        "detected_language_score": 0.0
+        "detected_language_score": 0.1
       },
-      "header_server_timing": "detect;dur=0.040"
+      "header_server_timing": "detect;dur=0.035"
     },
     {
       "scenario": "unsupported_language",
       "status_code": 422,
       "body": {
-        "request_id": "d34016dc366b",
+        "request_id": "30a152445b36",
         "error_code": "unsupported_language",
         "message": "Only English texts are supported.",
         "detected_language": "pt",
-        "detected_language_score": 0.9048374180359595
+        "detected_language_score": 0.9
       },
-      "header_server_timing": "detect;dur=0.022"
+      "header_server_timing": "detect;dur=0.032"
     }
   ],
   "empty_text_request": {
     "status_code": 422,
     "body": {
-      "request_id": "457602ef245f",
+      "request_id": "479d612d2f66",
       "error_code": "validation_failed",
       "message": "Request body is invalid.",
       "detected_language": null,
       "detected_language_score": null
     },
-    "headers_x_request_id": "457602ef245f"
+    "headers_x_request_id": "479d612d2f66"
   }
 }

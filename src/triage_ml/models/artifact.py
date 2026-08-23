@@ -334,6 +334,13 @@ def load_artifact(joblib_path: str | Path) -> tuple[Any, dict[str, Any]]:
     joblib_path = Path(joblib_path)
     metadata_path = joblib_path.with_name("metadata.json")
     classes_path = joblib_path.with_name("classes.json")
+    if (
+        joblib_path.parent.is_symlink()
+        or joblib_path.is_symlink()
+        or metadata_path.is_symlink()
+        or classes_path.is_symlink()
+    ):
+        raise ArtifactCompatibilityError("artifact symlinks are not allowed")
     if not joblib_path.is_file() or not metadata_path.is_file():
         raise FileNotFoundError(
             f"model.joblib and metadata.json are required under {joblib_path.parent}"
@@ -355,6 +362,36 @@ def load_artifact(joblib_path: str | Path) -> tuple[Any, dict[str, Any]]:
             )
         handle.seek(0)
         pipeline = joblib.load(handle)
+
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+    from sklearn.svm import LinearSVC
+
+    if not isinstance(pipeline, Pipeline) or list(pipeline.named_steps) != ["tfidf", "clf"]:
+        raise ArtifactCompatibilityError("model must be a tfidf/clf sklearn Pipeline")
+    tfidf = pipeline.named_steps["tfidf"]
+    classifier = pipeline.named_steps["clf"]
+    expected_classifier = metadata["preprocessing"]["classifier"]
+    classifier_types = {"logreg": LogisticRegression, "linear_svc": LinearSVC}
+    if not isinstance(tfidf, TfidfVectorizer) or not isinstance(
+        classifier, classifier_types[expected_classifier]
+    ):
+        raise ArtifactCompatibilityError("model steps disagree with metadata.preprocessing")
+    declared_params = (
+        ("tfidf", metadata["preprocessing"]["tfidf"], tfidf.get_params(deep=False)),
+        (
+            "classifier",
+            metadata["preprocessing"]["classifier_params"],
+            classifier.get_params(deep=False),
+        ),
+    )
+    for component, expected_params, actual_params in declared_params:
+        for name, expected_value in expected_params.items():
+            if name not in actual_params or _coerce(actual_params[name]) != _coerce(expected_value):
+                raise ArtifactCompatibilityError(
+                    f"model {component} parameter {name!r} disagrees with metadata"
+                )
 
     model_classes = [_coerce(value) for value in getattr(pipeline, "classes_", [])]
     if model_classes != metadata["classes"]:

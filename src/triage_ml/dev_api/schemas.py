@@ -12,8 +12,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, StringConstraints
 
-# Hard upper bound keeps the request body small and prevents accidental
-# abuse while still fitting the longest abstract in the corpus
+# Field bound rejects oversized text after JSON parsing while still fitting
+# the longest abstract in the corpus. Deployment must limit HTTP body bytes.
 # (median ~1.2k characters, max ~4k).
 
 

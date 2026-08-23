@@ -4,10 +4,10 @@ We rely on ``langid`` (lid.py) — a small, deterministic language
 identifier that ships with a prebuilt model and has no network
 dependency.
 
-``langid.classify`` returns a tuple ``(iso_code, log_probability)``
-where ``log_probability`` is a non-positive float. We normalise it
-back to a confidence value in ``[0, 1]`` via ``math.exp(raw_score)``
-so the rest of the API can speak in probabilities consistently.
+The package-level ``langid.classify`` returns an unnormalised score, so
+the API uses its own ``LanguageIdentifier`` configured with
+``norm_probs=True``. The resulting score is a normalized probability in
+``[0, 1]`` (not a calibrated confidence estimate).
 
 The module is intentionally framework-agnostic so tests can patch
 :func:`detect_language` directly without monkeypatching globals.
@@ -15,10 +15,11 @@ The module is intentionally framework-agnostic so tests can patch
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
-import langid
+from langid.langid import LanguageIdentifier, model
+
+LANGUAGE_IDENTIFIER = LanguageIdentifier.from_modelstring(model, norm_probs=True)
 
 
 @dataclass(frozen=True)
@@ -38,21 +39,6 @@ class UnsupportedLanguageError(ValueError):
         self.code = code
         self.score = score
         self.reason = reason
-
-
-def _normalise_score(raw_score: float) -> float:
-    """Convert ``langid``'s log-probability into a confidence in ``[0, 1]``.
-
-    ``langid`` returns the natural log of the probability assigned to
-    the predicted class. Anything below about ``log(1e-200)`` saturates
-    to ``0``; anything at or above ``0`` saturates to ``1``.
-    """
-
-    if raw_score >= 0:
-        return 1.0
-    if raw_score <= -500:
-        return 0.0
-    return max(0.0, min(1.0, math.exp(raw_score)))
 
 
 def detect_language(
@@ -86,7 +72,7 @@ def detect_language(
         )
 
     try:
-        iso_code, raw_score = langid.classify(text)
+        iso_code, probability = LANGUAGE_IDENTIFIER.classify(text)
     except (ValueError, IndexError, ZeroDivisionError) as exc:
         # langid can raise on very short / token-free inputs even after the
         # length guard. Treat those as indeterminate so the API never crashes.
@@ -95,7 +81,7 @@ def detect_language(
             score=None,
             reason="indeterminate_language",
         ) from exc
-    score = _normalise_score(float(raw_score))
+    score = float(probability)
     iso_code = iso_code.lower()
 
     if score < min_score:

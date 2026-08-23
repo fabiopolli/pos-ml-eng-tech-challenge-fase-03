@@ -97,6 +97,7 @@ def test_health_calls_endpoint_and_parses_response(dashboard_module):
     assert method == "GET"
     assert url == "http://api.example.com/health"
     assert mocked.call_args.kwargs["timeout"] == dashboard_module.REQUEST_TIMEOUT_SECONDS
+    assert mocked.call_args.kwargs["allow_redirects"] is False
     assert result.status_code == 200
     assert result.body["model_loaded"] is True
     assert result.server_timing == "detect;dur=0.500, predict;dur=1.234"
@@ -138,6 +139,13 @@ def test_invalid_json_body_is_wrapped_in_raw(dashboard_module):
     assert result.body == {"raw": "<html>oops</html>"}
 
 
+def test_non_object_json_body_is_wrapped(dashboard_module):
+    response = _FakeResponse(status_code=502, body=["unexpected"])
+    with patch.object(dashboard_module.requests, "request", return_value=response):
+        result = dashboard_module._check_health("http://api.example.com")
+    assert result.body == {"raw_json": ["unexpected"]}
+
+
 def test_request_exception_surfaces_to_caller(dashboard_module):
     with patch.object(
         dashboard_module.requests,
@@ -153,9 +161,9 @@ def test_language_presets_have_expected_error_codes(dashboard_module):
     assert presets["Texto curto (<20 chars)"]["expected_error_code"] == (
         "text_too_short_for_language_check"
     )
-    assert presets["Confiança baixa (mock)"]["expected_error_code"] == ("indeterminate_language")
     assert presets["Idioma fora do allow-list"]["expected_error_code"] == ("unsupported_language")
     assert presets["Inglês válido"]["expected_error_code"] is None
+    assert len(presets) == 3
     # Texts must satisfy the minimum length except for the short preset.
     for name, payload in presets.items():
         if name == "Texto curto (<20 chars)":

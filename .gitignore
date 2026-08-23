@@ -16,6 +16,7 @@ venv/
 
 # Data and model artifacts
 data/*.csv
+data/.~lock.*#
 data/raw/*
 !data/raw/README.md
 data/processed/*
@@ -44,4 +45,3 @@ Thumbs.db
 *.log
 credentials*.json
 service-account*.json
-

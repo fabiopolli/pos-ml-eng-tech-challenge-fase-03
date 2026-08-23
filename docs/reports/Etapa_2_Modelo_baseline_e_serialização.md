@@ -5,19 +5,20 @@
 | Integrante | Will (Bill) |
 | Etapa do checklist | Etapa 2 (baseline) — `docs/CHECKLIST.md` reordenado em 2026-08-23 |
 | Período desta entrega | 2026-08-23 (uma única sessão de trabalho) |
-| Última revisão | commit `002f648` em `origin/main` (remoção dos "Atalhos" da sidebar) — chain inclui endpoints `/models` + `/reload`, model picker no dashboard e helpers `_list_models`/`_reload_model` |
+| Última revisão | 2026-08-23 — robustez do detector de idioma, registry/reload, serialização atômica, dashboard e testes de regressão |
 | Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Fase 2 |
 
 Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma **API de desenvolvimento** (`src/triage_ml/dev_api/`) que outros integrantes (Romário, Denis, Fábio) possam consumir para validar localmente. A API de desenvolvimento **consome o modelo real treinado** — não é um stub. A API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará este contrato. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
 
 ## 1. Resumo executivo
 
-- Modelo baseline: TF-IDF + **LinearSVC**, escolhido por macro-F1 em validação cruzada estratificada de 5 folds somente no treino (LinearSVC `0.7335` vs LogisticRegression `0.7319`). O `test set` permaneceu vedado até a avaliação final.
+- Modelo baseline: TF-IDF + **LinearSVC**, escolhido na execução atual por macro-F1 em validação cruzada estratificada de 5 folds somente no treino (LinearSVC `0.7335` vs LogisticRegression `0.7319`). Um experimento legado já havia avaliado LogisticRegression no mesmo split; portanto o holdout não deve ser apresentado como nunca observado durante todo o desenvolvimento.
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
-- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana). O endpoint `/reload` permite trocar o holder em runtime após re-validar manifesto + checksum (`ModelHolder.reload_to`); falhas preservam o modelo anterior.
-- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, política de idioma e helpers do dashboard: **66 testes verdes** em `uv run pytest`.
-- Lint e formatação verdes (`ruff check .` / `ruff format .`).
+- O artefato canônico registra `git_dirty=true`; as métricas continuam verificáveis localmente, mas uma promoção futura deve ser regenerada a partir de commit limpo para rastreabilidade exata.
+- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana). O endpoint `/reload` permite trocar o holder em runtime após re-validar manifesto + checksum (`ModelHolder.reload_to`); falhas preservam o modelo anterior.
+- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, configuração/política de idioma e helpers do dashboard: **80 testes verdes** em `uv run pytest`.
+- Lint e formatação verdes (`ruff check .` / `ruff format --check .`).
 
 ## 2. Escopo e alinhamento com o plano
 
@@ -44,6 +45,10 @@ A Fase 2 (otimização ONNX, instrumentação Prometheus, Compose com API+Promet
 | Cabeçalho de timing | apenas `latency_ms` no body | `Server-Timing: predict;dur=<latency_ms>` |
 | `label_mapping` em runtime | lido de `data/medical_tc_labels.csv` | lido do `metadata.json` (sem CSV em runtime) |
 | `label_mapping` em runtime | — | removido: nomes das classes vêm só do manifesto |
+| Score de idioma | `exp(score bruto)` tratado como probabilidade | `LanguageIdentifier(norm_probs=True)`; probabilidade normalizada, não calibrada |
+| Publicação do artefato | diretório final criado antes de todos os arquivos | staging no mesmo filesystem + `rename` atômico ao final |
+| Model picker | listava qualquer diretório com nome válido | registry único; omite artefatos incompletos, inválidos e symlinks |
+| Reload concorrente | campos do holder atualizados separadamente | publicação sob lock e snapshot único por request |
 
 > O artefato legado em `models/v1/` não passa mais em `validate_metadata` e não é mais carregável. Todo novo treino cria uma versão nova.
 
@@ -95,7 +100,7 @@ Métricas por classe (`metadata.metrics.per_class`):
 | 4 (cardiovascular diseases) | 0.807 | 0.817 | 0.812 | 230 |
 | 5 (general pathological conditions) | 0.649 | 0.690 | 0.669 | 303 |
 
-Figura [`08_confusion_matrix_linear_svc.png`](../../reports/figures/08_confusion_matrix_linear_svc.png) registra a matriz de confusão do vencedor. A classe 3 (nervous system) é a mais fraca — observação alinhada com a literatura (classe minoritária e vocabulário mais heterogêneo). Top features por classe estão em [`08_top_features_linear_svc.png`](../../reports/figures/08_top_features_linear_svc.png).
+Figura [`08_confusion_matrix_linear_svc.png`](../../reports/figures/08_confusion_matrix_linear_svc.png) registra a matriz de confusão do vencedor. A classe 3 (nervous system) tem o menor F1; a hipótese de maior heterogeneidade lexical ainda precisa de avaliação específica. Top features por classe estão em [`08_top_features_linear_svc.png`](../../reports/figures/08_top_features_linear_svc.png).
 
 ## 4. Serialização e contrato do artefato
 
@@ -110,7 +115,7 @@ models/
     └── summary.json              # saída completa do run_training
 ```
 
-A versão é derivada de `datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")` e dos primeiros 12 caracteres do SHA-256 da concatenação dos fingerprints do dataset preparado e da config. `ArtifactPaths.ensure` chama `mkdir(exist_ok=False)`, recusando sobrescrita.
+A versão é derivada de `datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")` e dos primeiros 12 caracteres do SHA-256 da concatenação dos fingerprints do dataset preparado e da config. O treino grava primeiro em um diretório oculto de staging no mesmo filesystem e só publica a versão final com `rename` atômico depois de gerar modelo, classes, manifesto e figuras. Falhas removem o staging; uma versão existente nunca é sobrescrita.
 
 ### 4.2 `metadata.json` (schema v1)
 
@@ -154,7 +159,7 @@ Topo (resumo):
     "joblib": "..."
   },
   "git_commit": "<SHA-40>",
-  "git_dirty": false,
+  "git_dirty": true,
   "fingerprints": {
     "raw_csv_sha256": "...",
     "prepared_dataset_sha256": "...",
@@ -169,15 +174,15 @@ Topo (resumo):
 
 `validate_metadata` em `artifact.py` aplica checagens estruturais: schema_version, formato da versão, inteiros únicos em `classes`, `label_mapping` cobre exatamente as classes, métricas em `[0, 1]`, `selection` consistente com `preprocessing`, dependências obrigatórias, git_commit como SHA-40 ou `"unknown"`, e regex de SHA-256 para cada fingerprint e para o checksum.
 
-### 4.3 Carregamento seguro (`load_artifact`)
+### 4.3 Carregamento de artefato local confiável (`load_artifact`)
 
 `load_artifact(path)` em `triage_ml/models/artifact.py` aplica três camadas:
 
 1. Valida o manifesto (`validate_metadata`) e exige `model.joblib` + `metadata.json` no diretório.
 2. Verifica o `checksum_sha256` do `joblib` com `hmac.compare_digest` (sem timing attacks).
-3. Desserializa o pipeline e exige `pipeline.classes_ == metadata.classes`. Se `classes.json` existir, exige também que ele combine com `metadata.classes`.
+3. Rejeita symlinks, desserializa o pipeline e exige os passos `tfidf`/`clf`, tipos coerentes, parâmetros declarados compatíveis e `pipeline.classes_ == metadata.classes`. Se `classes.json` existir, exige também que ele combine com `metadata.classes`.
 
-Falhas levantam `ArtifactIntegrityError` ou `ArtifactCompatibilityError`. A API aborta o startup com `RuntimeError` se isso falhar.
+Falhas levantam `ArtifactIntegrityError` ou `ArtifactCompatibilityError`. A API aborta o startup com `RuntimeError` se isso falhar. O checksum detecta corrupção/mismatch, mas não autentica origem; por isso o loader continua restrito a artefatos locais confiáveis.
 
 ### 4.4 Por que não Random Forest (RF)
 
@@ -191,8 +196,8 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
 
 - **`/health`**: retorna `HealthOut(status, model_version, model_loaded)`. Se o artefato não carregar, a aplicação **não sobe** (`RuntimeError` no `lifespan`).
 - **`/model-info`** (`GET`): retorna `ModelInfoOut` com o manifesto validado do artefato (`metadata.json` validado por `validate_metadata`). Inclui `model_version`, `model_name`, `task_type`, `language`, `classes`, `label_mapping`, `random_state`, `n_train`, `n_test`, `metrics` (com `per_class`), `preprocessing`, `selection` (com `candidates` do CV 5-fold no treino), `dependency_versions`, `git_commit`, `git_dirty` e `created_at`. Útil para o dashboard de desenvolvimento e para ferramentas de validação inspecionarem o modelo em uso sem tocar o filesystem. Quando o artefato não está carregado, devolve `503 model_not_ready`.
-- **`/models`** (`GET`): lista as versões imutáveis disponíveis em `models/` (newest-first) via `_list_model_versions()` e devolve `ModelsListOut(versions, current)`. Read-only, sem efeito colateral.
-- **`/reload`** (`POST {"model_version": "..."}`): chama `ModelHolder.reload_to(version)` que resolve `<repo>/models/<version>/model.joblib`, re-executa `load_artifact` (manifesto + checksum + classes) e só então substitui os campos do holder. Em caso de falha (`FileNotFoundError`, `RuntimeError` do checksum, etc.) o holder anterior permanece em uso. Erros: `404 model_not_found` para versão inexistente e `500 model_incompatible` para falha de validação. Habilita o model picker do dashboard de desenvolvimento.
+- **`/models`** (`GET`): lista somente versões completas e íntegras no mesmo registry do holder (newest-first) e devolve `ModelsListOut(versions, current)`. Diretórios incompletos, manifestos inválidos e symlinks são omitidos.
+- **`/reload`** (`POST {"model_version": "..."}`): chama `ModelHolder.reload_to(version)` no registry configurado, re-executa validação de manifesto/checksum/classes/estrutura e publica todos os campos sob lock. Cada predição captura um snapshot único, evitando misturar pipeline antigo com metadata nova. Erros: `404 model_not_found` para versão inexistente e `500 model_incompatible` para falha de validação; o holder anterior permanece em uso.
 - **`/predict`** (`POST {"text": "..."}`):
   - `text` é normalizado via `Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20000)]`.
   - Inferência registrada em `latency_ms` com `time.perf_counter`.
@@ -216,7 +221,7 @@ api:
 `detect_language` em `triage_ml/dev_api/language.py` aplica a política em três camadas:
 
 1. **Comprimento mínimo** (`min_text_chars_for_language_check = 20`). Textos mais curtos são rejeitados com `error_code=text_too_short_for_language_check` (status 422) sem chamar o detector — `langid` é instável abaixo desse limite.
-2. **Confiança mínima** (`min_language_score = 0.0` por default, opt-in para endurecer). `langid.classify` retorna `(iso_code, log_prob)` com `log_prob ≤ 0`; o normalizador `_normalise_score` aplica `math.exp` com saturação em `[-500, 0]`. Detecções abaixo do limiar viram `error_code=indeterminate_language`.
+2. **Probabilidade mínima** (`min_language_score = 0.0` por default, opt-in para endurecer). A API usa uma instância própria de `LanguageIdentifier` com `norm_probs=True`; o valor fica em `[0, 1]`, mas não é confiança calibrada. Detecções abaixo do limiar viram `error_code=indeterminate_language`.
 3. **Allow-list de idiomas**. Códigos fora de `{"en"}` viram `error_code=unsupported_language`.
 
 `ErrorOut` ganhou dois campos opcionais — `detected_language` e `detected_language_score` — para que o cliente saiba por que o pedido foi rejeitado sem expor o `text`. O corpo nunca carrega o `text` original; o `Server-Timing` agora reporta `detect;dur=<ms>, predict;dur=<ms>` quando ambos os estágios rodam, ou apenas `detect;dur=<ms>` quando o detector interrompe o fluxo.
@@ -232,8 +237,8 @@ Execução de `python scripts/validate_api.py` produziu o relatório sanitizado 
 | Texto só com whitespace | 422 | `validation_failed` | — | sem vazamento |
 | Campo `text` ausente | 422 | `validation_failed` | — | `request_id` propagado |
 | Texto curto (`"liver tumor"`, 11 chars) | 422 | `text_too_short_for_language_check` | — | rejeitado antes do detector |
-| Mock `("en", -1000.0)` (score saturado em 0.0) | 422 | `indeterminate_language` | — | abaixo de `min_score=0.5` |
-| Mock `("pt", -0.1)` (score ≈ 0.905) | 422 | `unsupported_language` | — | acima do limiar mas fora do allow-list |
+| Mock `("en", 0.1)` | 422 | `indeterminate_language` | — | abaixo de `min_score=0.5` |
+| Mock `("pt", 0.9)` | 422 | `unsupported_language` | — | acima do limiar mas fora do allow-list |
 
 ## 6. Testes automatizados
 
@@ -241,19 +246,22 @@ Cobertura por arquivo:
 
 | Arquivo | Quantidade | Foco |
 |---|---|---|
-| `tests/test_model_pipeline.py` | 9 | `build_pipeline` (TF-IDF defaults, LR com `predict_proba`, LinearSVC com `class_weight=balanced`), end-to-end em corpus sintético |
-| `tests/test_model_artifact.py` | 12 | `ArtifactPaths`, `file_sha256`, `write_classes` (com `_coerce` de `numpy.int64`), `read_classes`, `validate_metadata` (campos obrigatórios), `verify_artifact_integrity` (caso feliz, model swap, checksum ausente), `load_artifact` |
-| `tests/test_model_training.py` | 1 | Integração `run_training + load_artifact` em dataset sintético, garantindo `selection.candidates = {logreg, linear_svc}`, `test_set_used_for_selection=False`, balanced_accuracy presente, `pipeline.classes_ == metadata.classes` |
-| `tests/test_dev_api.py` | 15 | Hermetismo via `create_app(holder=...)`, validação de schema em `/health`, `/predict` com `Server-Timing`, request_id interno não confiável, padding stripado, 422 parametrizado (string vazia, só whitespace, > 20 000 chars), `prediction_failed` sanitizado, `/model-info` retorna manifesto validado e 503 quando o artefato não está carregado, `/models` lista newest-first e tolera `models/` ausente, `/reload` troca o holder e devolve 404 `model_not_found` para versão inexistente, `ModelHolder.reload_to` recusa-se a mutar o holder em falha |
-| `tests/test_dev_api_language.py` | 10 | Política de idioma hermética: aceita inglês, rejeita texto curto, rejeita score baixo, rejeita idioma fora do allow-list, valida headers `Server-Timing`, garante que o `text` não vaza em logs nem na resposta de erro |
-| `tests/test_dev_dashboard_helpers.py` | 14 | Helpers HTTP do dashboard (`_check_health`, `_post_predict`, `_get_model_info`, `_render_model_sidebar`, `_format_pct`, `_list_models`, `_reload_model`, `ApiResponse._header`, presets da política de idioma, tratamento de body inválido e `RequestException`, raiz do repo) — mocka `requests.request` e `streamlit.*`, não precisa de API rodando |
+| `tests/test_data_preparation.py` | 4 | preparação, deduplicação, conflitos e split estratificado |
+| `tests/test_model_pipeline.py` | 9 | factories LR/LinearSVC, defaults, fit/predict multiclasses e probabilidade do LR |
+| `tests/test_model_artifact.py` | 11 | imutabilidade, checksum antes da desserialização, classes, diretório/manifesto, parâmetros declarados e rejeição de symlinks |
+| `tests/test_model_training.py` | 1 | integração `run_training + load_artifact`, seleção e fingerprints |
+| `tests/test_dev_api.py` | 21 | contratos HTTP, sanitização, limite de texto, manifesto, registry, artefato incompleto, reload/snapshot concorrente, 404 uniforme e headers |
+| `tests/test_dev_api_config.py` | 7 | ranges/tipos da política, YAML inválido e override inexistente |
+| `tests/test_dev_api_language.py` | 10 | idioma normalizado, branches da política, timings e privacidade |
+| `tests/test_dev_dashboard_helpers.py` | 15 | helpers HTTP/renderização, redirects desativados, JSON não objeto, presets e falhas de request |
+| `tests/test_repository_structure.py` | 2 | estrutura mínima e arquivos placeholder |
 
 Comando único:
 
 ```bash
-uv run pytest   # 66 passed in ~3s
+uv run pytest   # 80 passed
 uv run ruff check .
-uv run ruff format .
+uv run ruff format --check .
 ```
 
 ### 6.1 Dashboard de desenvolvimento (`front/app_dev.py`)
@@ -264,12 +272,12 @@ Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/
 
 - **Health** — chama `GET /health` e mostra `status`, `model_version`, `model_loaded`.
 - **Predição** — área de texto + `POST /predict` exibindo `label`, `label_name`, `score`, `latency_ms`, `request_id` e os headers `X-Request-ID` / `Server-Timing`.
-- **Política de idioma** — quatro cenários canônicos da política configurada em `configs/api.yaml` (texto curto, score baixo, idioma fora do allow-list, inglês válido), com validação automática do `error_code` retornado pela API.
+- **Política de idioma** — três cenários reproduzíveis via HTTP (texto curto, idioma fora do allow-list e inglês válido), com validação automática do `error_code`. O branch de probabilidade baixa permanece coberto por teste/script com detector mockado, pois o dashboard remoto não pode mockar o processo da API.
 
 **Sidebar**:
 
 - **Conexão** — URL base da API + botão "Atualizar health".
-- **🔁 Trocar modelo** — consome `GET /models`, lista as versões imutáveis disponíveis em `models/` (newest-first), mostra a atualmente em uso, deixa o usuário escolher outra via `<selectbox>` e dispara `POST /reload`. Em sucesso, força o refresh dos blocos abaixo (`/health`, `/models`, `/model-info`). Em erro (`404 model_not_found`, `500 model_incompatible`), exibe a mensagem em vermelho sem alterar o holder. Estado apenas em `st.session_state` — não persiste entre sessões Streamlit.
+- **🔁 Trocar modelo** — consome `GET /models`, lista versões válidas do registry (newest-first), mostra a atualmente em uso, deixa o usuário escolher outra e dispara `POST /reload`. Em sucesso, força o refresh de `/health`, `/models` e `/model-info`. O picker é local à sessão Streamlit, mas o reload altera o holder global do processo da API; por isso a ferramenta deve permanecer local.
 - **🧠 Modelo** — consome `GET /model-info` e renderiza, em cinco expanders:
   - **Identidade** — `model_version`, `model_name`, `task_type`, `language`.
   - **Treinamento** — métricas `n_train`/`n_test` via `st.metric`, `random_state`, `git_commit` (com marcação `(dirty)` quando aplicável), `created_at` e `dependency_versions`.
@@ -277,13 +285,13 @@ Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/
   - **Métricas** — quatro `st.metric` (accuracy / balanced_accuracy / macro_f1 / weighted_f1) e tabela per-classe (`precision`, `recall`, `f1`, `support`).
   - **Classes & mapeamento** — lista de classes e tabela com `label` ↔ `name`.
 
-O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos — o estado do model picker vive só em `st.session_state` e some quando o Streamlit reinicia. Helpers HTTP (`_check_health`, `_post_predict`, `_get_model_info`, `_list_models`, `_reload_model`, `_request_json`) são cobertos por testes herméticos em `tests/test_dev_dashboard_helpers.py` que mockam `requests.request` e `streamlit.*` (não precisam da API rodando). Validação manual local usando os próprios helpers contra a API rodando em `127.0.0.1:8765`:
+O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos em disco; widgets mantêm valores em memória durante a sessão Streamlit. Helpers HTTP são cobertos por testes herméticos, não seguem redirects e limpam os caches de manifesto/modelos quando a URL da API muda.
 
 ```text
 HEALTH 200 {'status': 'ok', 'model_version': '20260823T135811Z-bed2194376bc', 'model_loaded': True}
 PRED OK 200 neoplasms timing= detect;dur=881.603, predict;dur=8.982
 SHORT 422 text_too_short_for_language_check det= None
-UNSUP 422 unsupported_language det= pt score= 1.5e-177
+UNSUP 422 unsupported_language det= pt score= 0.9
 ```
 
 ## 7. Riscos conhecidos e trabalho futuro
@@ -295,6 +303,8 @@ UNSUP 422 unsupported_language det= pt score= 1.5e-177
 | API oficial com Docker e auth | Pendente | Romário, Etapa 3 — herda o contrato desta API de desenvolvimento |
 | DAG Airflow de retreino | Pendente | Denis, Etapa 7 — consome `triage_ml.models.train.run_training` |
 | Classe 3 (nervous system) com F1 baixo | Aceito, documentado | Investigar balanceamento de classes e features mais ricas (n-gramas maiores, char n-gramas) em baseline da Fase 2 antes da otimização |
+| Holdout reutilizado por experimento legado | Limitação metodológica documentada | Tratar o split atual como desenvolvimento e reservar novo holdout ou usar nested CV antes de uma afirmação final de generalização |
+| Artefato canônico com `git_dirty=true` | Pendente de promoção limpa | Regenerar modelo/evidência a partir de commit limpo antes da entrega final |
 
 ## 8. Como reproduzir a entrega
 
@@ -316,7 +326,7 @@ curl -s -X POST http://127.0.0.1:8000/predict \
 
 # 5. Testes e lint
 uv run pytest
-uv run ruff check . && uv run ruff format .
+uv run ruff check . && uv run ruff format --check .
 ```
 
 ## 9. Mapa dos artefatos
@@ -364,4 +374,4 @@ front/
 
 ## 10. Conclusão
 
-A Fase 1 entrega o baseline do classificador e endurece o contrato do artefato a ponto de ser seguro oferecer para a Etapa 3 (API oficial) e a Etapa 7 (Airflow) sem rework. O pipeline TF-IDF + LinearSVC atinge `macro-F1 = 0.7296` no split de teste, com seleção honesta por CV 5-fold no treino. A API de desenvolvimento (`src/triage_ml/dev_api/`) já entrega `latency_ms`, request_id interno e `Server-Timing` consumindo o modelo real, removendo o atrito de integrar a Etapa 6 (Prometheus/Grafana) na Fase 2. O restante do trabalho (otimização, instrumentação, dashboard, privacidade operacional) está descrito em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e aguarda a próxima janela de trabalho.
+A Fase 1 entrega o baseline do classificador e endurece o contrato do artefato para consumo pela Etapa 3 (API oficial) e pela Etapa 7 (Airflow). O pipeline TF-IDF + LinearSVC atinge `macro-F1 = 0.7296` no split avaliado, e a execução atual seleciona o classificador por CV 5-fold somente no treino; a reutilização histórica desse holdout permanece explicitada como limitação. A API de desenvolvimento já entrega `latency_ms`, request_id interno e `Server-Timing` consumindo o modelo real. Antes da promoção final, o artefato deve ser regenerado em commit limpo. O restante do trabalho está descrito em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md).

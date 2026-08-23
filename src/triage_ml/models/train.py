@@ -6,8 +6,10 @@ import argparse
 import hashlib
 import json
 import platform
+import shutil
 import subprocess
 import sys
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,7 +42,13 @@ from triage_ml.models.artifact import (
     write_classes,
     write_metadata,
 )
-from triage_ml.models.pipeline import VALID_CLASSIFIERS, build_pipeline
+from triage_ml.models.pipeline import (
+    DEFAULT_LINEAR_SVC,
+    DEFAULT_LOGREG,
+    DEFAULT_TFIDF,
+    VALID_CLASSIFIERS,
+    build_pipeline,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_CONFIG = REPO_ROOT / "configs" / "training.yaml"
@@ -123,6 +131,9 @@ def compare_classifiers(
     folds = int(config.get("cv_folds", 5))
     if folds < 2:
         raise ValueError("cv_folds must be at least 2")
+    class_counts = train_df["target"].value_counts()
+    if class_counts.empty or int(class_counts.min()) < folds:
+        raise ValueError("each class must contain at least cv_folds training rows")
     cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
     scores: dict[str, dict[str, Any]] = {}
     for name in VALID_CLASSIFIERS:
@@ -140,7 +151,10 @@ def compare_classifiers(
             cv=cv,
             scoring="f1_macro",
             n_jobs=1,
+            error_score="raise",
         )
+        if not np.isfinite(fold_scores).all():
+            raise ValueError(f"cross-validation returned non-finite scores for {name}")
         scores[name] = {
             "fold_macro_f1": [float(score) for score in fold_scores],
             "mean_macro_f1": float(fold_scores.mean()),
@@ -311,53 +325,63 @@ def run_training(
     }
     model_version = _model_version(prepared_fingerprint, config_fingerprint)
     paths = ArtifactPaths.for_version(out_dir, model_version)
-    paths.ensure()
-    joblib.dump(pipeline, paths.joblib)
-    persisted_classes = write_classes(paths.classes, pipeline.classes_)
+    if paths.version_dir.exists():
+        raise FileExistsError(f"artifact version already exists: {paths.version_dir}")
+    staging_paths = ArtifactPaths.for_version(out_dir, f".{model_version}.tmp-{uuid.uuid4().hex}")
+    staging_paths.ensure()
     configured_name = str(config.get("model_name", "triage_ml_tfidf_logreg"))
     model_name = (
         configured_name if classifier_name == "logreg" else f"triage_ml_tfidf_{classifier_name}"
     )
     git_commit, git_dirty = _git_state()
-    metadata = build_metadata(
-        model_version=model_version,
-        model_name=model_name,
-        task_type=str(config["task_type"]),
-        language=str(config["language"]),
-        classes=persisted_classes,
-        label_mapping=label_mapping,
-        random_state=seed,
-        n_train=len(train_df),
-        n_test=len(test_df),
-        metrics=metrics,
-        preprocessing={
-            "vectorizer": "tfidf",
-            "tfidf": config.get("tfidf", {}),
-            "classifier": classifier_name,
-            "classifier_params": classifier_params,
-        },
-        selection=selection,
-        dependency_versions={
-            "python": platform.python_version(),
-            "numpy": np.__version__,
-            "scipy": scipy.__version__,
-            "scikit_learn": sklearn.__version__,
-            "joblib": joblib.__version__,
-        },
-        git_commit=git_commit,
-        git_dirty=git_dirty,
-        fingerprints=fingerprints,
-        joblib_path=paths.joblib,
-    )
-    write_metadata(paths.metadata, metadata)
-
+    effective_tfidf = {**DEFAULT_TFIDF, **(_coerce_tfidf(config.get("tfidf")) or {})}
+    classifier_defaults = DEFAULT_LOGREG if classifier_name == "logreg" else DEFAULT_LINEAR_SVC
+    effective_classifier_params = {**classifier_defaults, **classifier_params}
     figures_dir = Path(figures_dir)
     figures_dir.mkdir(parents=True, exist_ok=True)
     suffix = "lr" if classifier_name == "logreg" else classifier_name
-    cm_path = plot_confusion_matrix(
-        test_df["target"], y_pred, labels, figures_dir / f"08_confusion_matrix_{suffix}.png"
-    )
-    top_path = plot_top_features(pipeline, labels, figures_dir / f"08_top_features_{suffix}.png")
+    cm_path = figures_dir / f"08_confusion_matrix_{suffix}.png"
+    top_path = figures_dir / f"08_top_features_{suffix}.png"
+    try:
+        joblib.dump(pipeline, staging_paths.joblib)
+        persisted_classes = write_classes(staging_paths.classes, pipeline.classes_)
+        metadata = build_metadata(
+            model_version=model_version,
+            model_name=model_name,
+            task_type=str(config["task_type"]),
+            language=str(config["language"]),
+            classes=persisted_classes,
+            label_mapping=label_mapping,
+            random_state=seed,
+            n_train=len(train_df),
+            n_test=len(test_df),
+            metrics=metrics,
+            preprocessing={
+                "vectorizer": "tfidf",
+                "tfidf": effective_tfidf,
+                "classifier": classifier_name,
+                "classifier_params": effective_classifier_params,
+            },
+            selection=selection,
+            dependency_versions={
+                "python": platform.python_version(),
+                "numpy": np.__version__,
+                "scipy": scipy.__version__,
+                "scikit_learn": sklearn.__version__,
+                "joblib": joblib.__version__,
+            },
+            git_commit=git_commit,
+            git_dirty=git_dirty,
+            fingerprints=fingerprints,
+            joblib_path=staging_paths.joblib,
+        )
+        write_metadata(staging_paths.metadata, metadata)
+        plot_confusion_matrix(test_df["target"], y_pred, labels, cm_path)
+        top_path = plot_top_features(pipeline, labels, top_path)
+        staging_paths.version_dir.rename(paths.version_dir)
+    except Exception:
+        shutil.rmtree(staging_paths.version_dir, ignore_errors=True)
+        raise
     return {
         "model_version": model_version,
         "model_name": model_name,

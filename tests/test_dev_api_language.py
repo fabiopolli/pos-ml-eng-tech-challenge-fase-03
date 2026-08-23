@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from unittest.mock import patch
 
@@ -162,23 +161,22 @@ def test_detect_language_rejects_short_text() -> None:
 
 
 def test_detect_language_rejects_low_confidence() -> None:
-    # Force a low-confidence verdict: log-prob ~ -10 -> confidence ~ 4.5e-5
-    with patch.object(api_language.langid, "classify", return_value=("en", -10.0)):
+    with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("en", 0.1)):
         with pytest.raises(UnsupportedLanguageError) as exc_info:
             detect_language(EN_TEXT, min_chars=20, min_score=0.85, supported={"en"})
     assert exc_info.value.reason == "indeterminate_language"
     assert exc_info.value.code == "en"
-    assert exc_info.value.score == pytest.approx(math.exp(-10.0), abs=1e-9)
+    assert exc_info.value.score == pytest.approx(0.1)
 
 
 def test_detect_language_rejects_unsupported_language() -> None:
     # Force the verdict to be Portuguese at a confident score
-    with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):
+    with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("pt", 0.9)):
         with pytest.raises(UnsupportedLanguageError) as exc_info:
             detect_language(PT_TEXT, min_chars=20, min_score=0.0, supported={"en"})
     assert exc_info.value.reason == "unsupported_language"
     assert exc_info.value.code == "pt"
-    assert exc_info.value.score == pytest.approx(math.exp(-50.0), abs=1e-12)
+    assert exc_info.value.score == pytest.approx(0.9)
 
 
 def test_api_predict_accepts_english_text(
@@ -228,13 +226,13 @@ def test_api_predict_rejects_non_english_text(
     monkeypatch.setattr("triage_ml.dev_api.app.get_api_config", lambda: config)
     reset_api_config_cache()
     try:
-        with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):
+        with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("pt", 0.9)):
             response = client.post("/predict", json={"text": PT_TEXT})
         assert response.status_code == 422
         body = response.json()
         assert body["error_code"] == "unsupported_language"
         assert body["detected_language"] == "pt"
-        assert body["detected_language_score"] == pytest.approx(math.exp(-50.0), abs=1e-12)
+        assert body["detected_language_score"] == pytest.approx(0.9)
         assert PT_TEXT not in response.text
         timing = response.headers["server-timing"]
         assert "detect;dur=" in timing
@@ -259,13 +257,13 @@ def test_api_predict_rejects_indeterminate_language(
     client: TestClient,
     fixed_config: ApiConfig,
 ) -> None:
-    with patch.object(api_language.langid, "classify", return_value=("en", -10.0)):
+    with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("en", 0.1)):
         response = client.post("/predict", json={"text": EN_TEXT})
     assert response.status_code == 422
     body = response.json()
     assert body["error_code"] == "indeterminate_language"
     assert body["detected_language"] == "en"
-    assert body["detected_language_score"] == pytest.approx(math.exp(-10.0), abs=1e-9)
+    assert body["detected_language_score"] == pytest.approx(0.1)
 
 
 def test_api_predict_language_error_does_not_leak_text_in_logs(
@@ -278,7 +276,7 @@ def test_api_predict_language_error_does_not_leak_text_in_logs(
         f"{sentinel} - relatamos um paciente com dor torácica aguda e dispneia progressiva, "
         "submetido a angiocoronariografia que confirmou oclusão arterial importante."
     )
-    with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):
+    with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("pt", 0.9)):
         with caplog.at_level("INFO", logger="triage_ml.dev_api"):
             response = client.post("/predict", json={"text": payload})
     assert response.status_code == 422
@@ -295,15 +293,15 @@ def test_api_predict_uses_configured_thresholds(
     """Custom thresholds from ApiConfig are honoured at request time."""
 
     permissive = ApiConfig(
-        supported_languages={"en", "pt"},
+        supported_languages={"en"},
         min_text_chars_for_language_check=5,
-        min_language_score=0.0,
+        min_language_score=0.8,
     )
     monkeypatch.setattr("triage_ml.dev_api.app.get_api_config", lambda: permissive)
     reset_api_config_cache()
     try:
-        with patch.object(api_language.langid, "classify", return_value=("pt", -50.0)):
-            response = client.post("/predict", json={"text": PT_TEXT})
+        with patch.object(api_language.LANGUAGE_IDENTIFIER, "classify", return_value=("en", 0.9)):
+            response = client.post("/predict", json={"text": EN_TEXT})
         assert response.status_code == 200
         timing = response.headers["server-timing"]
         assert "predict;dur=" in timing
