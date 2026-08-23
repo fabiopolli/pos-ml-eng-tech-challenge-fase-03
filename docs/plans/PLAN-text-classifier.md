@@ -295,7 +295,7 @@ Evolução dos contratos da Fase 1:
   - Métricas: `triage_ml_requests_total{route,method,status,model_variant}`, `triage_ml_request_latency_seconds{route,method,model_variant}`, `triage_ml_prediction_errors_total{route,error_code,model_variant}`.
   - **Sem** `text`, **sem** `label`, **sem** `request_id` em labels.
 - **Privacidade** (subseção nova da Etapa 6 do checklist):
-  - Teste automatizado varre respostas de erro, métricas e logs gerados em teste; falha se encontrar o texto controlado da fixture ou campos de entrada indevidos. `metadata.json` é validado por schema e não contém registros do dataset.
+  - Teste automatizado varre respostas de erro, métricas e logs gerados em teste; falha se encontrar o **texto controlado da fixture** (string completa e trechos exclusivos), os campos `input`/`text` indevidos ou headers sensíveis. Asserção adicional: `metadata.json` é validado por schema e nenhum de seus campos contém texto do dataset. O teste **carrega apenas o fixture**, nunca o dataset bruto.
 
 ## F2. Tarefas e sequência
 
@@ -349,8 +349,9 @@ Evolução dos contratos da Fase 1:
 - JSON canônico versionado em `monitoring/grafana/dashboards/triage_ml.json` e referenciado como evidência no checklist, sem cópia divergente em `reports/figures/`.
 
 ### F2.T8. Teste de privacidade
-- `tests/test_monitoring_metrics.py`: chama `/predict` com texto controlado, captura logs, respostas de erro e métricas, e confirma que o texto **não** aparece em nenhum deles.
-- A asserção usa o valor exato e trechos exclusivos da fixture, além de verificar a ausência de campos `input` e headers sensíveis. Não varre o dataset bruto durante o teste.
+- `tests/test_monitoring_metrics.py`: chama `/predict` com texto controlado (fixture pequena), captura logs, respostas de erro e métricas, e confirma que **nem o texto completo nem trechos exclusivos da fixture** aparecem em nenhum desses canais. Verifica também ausência de campos `input`/`text` em respostas e de headers sensíveis.
+- O teste carrega apenas a fixture local; o dataset bruto (`medical_tc_train.csv`, `medical_tc_test.csv`) **não** é aberto durante o teste, evitando leitura desnecessária do conteúdo clínico.
+- O `metadata.json` é validado por schema; nenhum dos seus campos pode conter string que case com a fixture.
 
 ### F2.T9. Documentação
 - Atualizar `docs/CHECKLIST.md`: Etapa 5 e Etapa 6 marcadas com evidência (figuras, `benchmark.json`, JSON do dashboard, print).
