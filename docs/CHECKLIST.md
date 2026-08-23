@@ -2,7 +2,8 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-08-23 — revisão de robustez da Fase 1 (score normalizado de idioma, publicação atômica, registry validado e holder consistente sob concorrência).
+Última atualização: 2026-08-23 — revisão de robustez da Fase 1 (dados, artefatos,
+registry, packaging e CI).
 
 ## Visão geral e responsáveis
 
@@ -32,6 +33,12 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 > Atualização 2026-08-23 (limpeza da sidebar): a seção "📚 Atalhos" e as constantes `DOC_PLAN`/`DOC_CHECKLIST`/`DOC_REPORT_FASE_1` foram removidas do `front/app_dev.py`. O acesso ao Plan/Checklist/Relatório continua via Git/GitHub, e o teste `test_documentation_shortcuts_point_to_existing_files` foi excluído.
 >
 > Atualização 2026-08-23 (robustez): o score de idioma agora vem de `LanguageIdentifier(norm_probs=True)`, sem exponenciar o score bruto não normalizado. A configuração falha no startup quando inválida ou incompatível com o idioma do modelo. O treino publica via staging + rename atômico; `/models` omite artefatos incompletos/symlinks; reload e predição usam snapshot consistente do holder.
+>
+> Atualização 2026-08-23 (auditoria integral): o CSV bruto e o PDF de terceiros foram
+> removidos do estado atual do Git, com referências externas preservadas. Preparação e
+> split agora rejeitam coerções ambíguas e equivalências textuais com leakage; o loader
+> valida o bundle completo e a versão de scikit-learn antes de desserializar. O projeto
+> passou a gerar wheel/sdist e a CI verifica lockfile, formatação, lint, testes e build.
 
 ## Requisitos transversais
 
@@ -112,7 +119,7 @@ Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta 
 
 ### CI/CD, Docker e testes — Fábio
 
-- [x] Criar CI inicial com lint e pytest em push/PR para `main`.
+- [x] Criar CI com lockfile, formatação, lint, pytest e build do pacote em push/PR para `main`.
 - [ ] Ampliar testes conforme API, modelo e DAG forem integrados.
 - [ ] Criar Dockerfile funcional para inferência (imagem da API oficial).
 - [ ] Adicionar build da imagem ao CI.

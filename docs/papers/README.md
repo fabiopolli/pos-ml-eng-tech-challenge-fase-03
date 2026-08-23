@@ -2,7 +2,7 @@
 
 Esta pasta guarda artigos científicos que sustentam decisões técnicas do projeto.
 
-## `medical-abstracts-tc-eval-2022.pdf`
+## Medical Abstracts TC evaluation paper
 
 **Título**: *Evaluating Unsupervised Text Classification: Zero-shot and Similarity-based Approaches*.
 
@@ -18,4 +18,5 @@ Esta pasta guarda artigos científicos que sustentam decisões técnicas do proj
 - Referência de F1 micro no corpus para as abordagens LSA (31,6), SBERT MiniLM (46,5), Lbl2TransformerVec mpnet (56,5) e DeBERTa zero-shot (57,3). Esses números aparecem no plano como **contexto narrativo**, não como meta.
 - Hipóteses H1–H4 dos autores sustentam a escolha de um classificador supervisionado linear (TF-IDF + LogisticRegression / LinearSVC) em vez de embeddings no caminho crítico: PLMs maiores não compensam o custo em inferência, e treinar do zero no domínio não é pior.
 
-**Licença do paper**: uso acadêmico, com cópia local mantida para referência do time. O PDF em si não é redistribuído fora do repositório sem necessidade.
+**Acesso**: use o DOI oficial acima. O PDF foi removido da árvore atual do repositório;
+o histórico não foi reescrito nesta alteração.

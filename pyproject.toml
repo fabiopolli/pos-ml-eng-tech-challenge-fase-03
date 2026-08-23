@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "pos-ml-eng-tech-challenge-fase-03"
 version = "0.1.0"
@@ -20,6 +24,18 @@ dependencies = [
     "requests>=2.34.2",
 ]
 
+[project.scripts]
+triage-ml-train = "triage_ml.models.train:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+triage_ml = ["training.yaml"]
+
 [dependency-groups]
 dev = [
     "pytest>=8.3,<9",
@@ -39,4 +55,3 @@ extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-

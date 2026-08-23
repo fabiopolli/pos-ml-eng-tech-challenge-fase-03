@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 from unittest.mock import patch
 
 import joblib
+import numpy as np
 import pytest
+import scipy
+import sklearn
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -52,7 +56,7 @@ def _metadata(joblib_path: Path, pipeline: Pipeline) -> dict[str, object]:
         label_mapping={"1": "neoplasms", "4": "cardiovascular diseases"},
         random_state=42,
         n_train=3,
-        n_test=1,
+        n_test=2,
         metrics={
             "accuracy": 1.0,
             "balanced_accuracy": 1.0,
@@ -85,15 +89,17 @@ def _metadata(joblib_path: Path, pipeline: Pipeline) -> dict[str, object]:
                 }
                 for name in ("logreg", "linear_svc")
             },
+            "best_classifier": "logreg",
             "selected_classifier": "logreg",
+            "selection_policy": "highest_mean_macro_f1",
             "test_set_used_for_selection": False,
         },
         dependency_versions={
-            "python": "3.12",
-            "numpy": "2.0",
-            "scipy": "1.0",
-            "scikit_learn": "1.0",
-            "joblib": "1.0",
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
         },
         git_commit="0" * 40,
         git_dirty=False,
@@ -216,3 +222,36 @@ def test_verify_artifact_integrity_requires_valid_checksum(tmp_path: Path) -> No
     joblib_path.write_bytes(b"x")
     with pytest.raises(ArtifactIntegrityError, match="invalid checksum"):
         verify_artifact_integrity(joblib_path=joblib_path, metadata={})
+
+
+def test_metadata_rejects_impossible_version_timestamp(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    metadata["model_version"] = "20261340T256199Z-0123456789ab"
+
+    with pytest.raises(ValueError, match="timestamp"):
+        validate_metadata(metadata)
+
+
+def test_dependency_version_is_checked_before_deserialization(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    metadata["dependency_versions"]["scikit_learn"] = "0.0.0"
+    write_metadata(paths.metadata, metadata)
+
+    with patch("joblib.load") as mocked_load:
+        with pytest.raises(ArtifactCompatibilityError, match="dependency versions"):
+            load_artifact(paths.joblib)
+    mocked_load.assert_not_called()
+
+
+def test_load_artifact_requires_classes_manifest(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    paths.classes.unlink()
+
+    with pytest.raises(FileNotFoundError, match="classes.json"):
+        load_artifact(paths.joblib)

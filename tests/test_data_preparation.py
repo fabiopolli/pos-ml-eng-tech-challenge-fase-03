@@ -58,3 +58,42 @@ def test_split_rejects_duplicate_texts() -> None:
 
     with pytest.raises(ValueError, match="duplicate texts"):
         split_dataset(invalid)
+
+
+@pytest.mark.parametrize("label", [True, 1.5, float("inf"), "not-a-label", 6])
+def test_prepare_dataset_rejects_invalid_labels(label: object) -> None:
+    raw = _raw_dataset()
+    raw["condition_label"] = raw["condition_label"].astype(object)
+    raw.loc[0, "condition_label"] = label
+
+    with pytest.raises(ValueError, match="condition_label"):
+        prepare_dataset(raw, sample_size=2_000)
+
+
+def test_prepare_dataset_rejects_non_string_text() -> None:
+    raw = _raw_dataset()
+    raw["medical_abstract"] = raw["medical_abstract"].astype(object)
+    raw.loc[0, "medical_abstract"] = 123
+
+    with pytest.raises(ValueError, match="medical_abstract"):
+        prepare_dataset(raw, sample_size=2_000)
+
+
+def test_prepare_dataset_groups_unicode_and_case_equivalent_texts() -> None:
+    raw = _raw_dataset()
+    raw.loc[0, "medical_abstract"] = "Kidney Disease"
+    raw.loc[1, "medical_abstract"] = "ＫIDNEY disease"
+    raw.loc[1, "condition_label"] = 2
+
+    _, report = prepare_dataset(raw, sample_size=2_000)
+
+    assert report.conflicting_texts == 2
+    assert report.conflicting_rows == 4
+
+
+@pytest.mark.parametrize("test_size", [True, 0, 1, float("nan"), "0.2"])
+def test_split_rejects_invalid_test_size(test_size: object) -> None:
+    prepared, _ = prepare_dataset(_raw_dataset(), sample_size=2_000)
+
+    with pytest.raises(ValueError, match="test_size"):
+        split_dataset(prepared, test_size=test_size)  # type: ignore[arg-type]

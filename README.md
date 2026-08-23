@@ -148,7 +148,8 @@ macro_f1=0.7296
 weighted_f1=0.7438
 ```
 
-Figuras geradas em `reports/figures/`:
+Figuras existentes em `reports/figures/` e novas execuções versionadas em
+`reports/figures/<model_version>/`:
 
 - `08_confusion_matrix_linear_svc.png` — matriz de confusão do modelo selecionado no split de teste.
 - `08_top_features_linear_svc.png` — top-12 coeficientes por classe.
@@ -157,14 +158,17 @@ Figuras geradas em `reports/figures/`:
 
 ```bash
 # Compara LR/LinearSVC no treino, seleciona o melhor e cria uma versão imutável
-PYTHONPATH=src uv run python -m triage_ml.models.train
+uv run triage-ml-train
 
 # Override explícito para reproduzir um candidato específico
-PYTHONPATH=src uv run python -m triage_ml.models.train \
+uv run triage-ml-train \
   --classifier logreg
 ```
 
-O treino grava em `models/YYYYMMDDTHHMMSSZ-<12hex>/model.joblib` + `classes.json` + `metadata.json` (validado por `schema_version: 1`). Cada versão é imutável: para trocar de versão sem reiniciar a API de desenvolvimento, use `POST /reload` ou o picker do dashboard.
+O treino grava em `models/YYYYMMDDTHHMMSSZ-<12hex>/` os arquivos `model.joblib`,
+`classes.json`, `metadata.json` e `summary.json` (validado por `schema_version: 1`).
+Cada versão é imutável: para trocar de versão sem reiniciar a API de desenvolvimento,
+use `POST /reload` ou o picker do dashboard.
 
 Hiperparâmetros editáveis em `configs/training.yaml`.
 
@@ -176,11 +180,11 @@ Execute-a vinculada a localhost e com um único worker. O endpoint administrativ
 
 ```bash
 # Sem MODEL_PATH: a API escolhe automaticamente a versão timestampada mais recente em models/
-PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
+uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # Ou fixando um artefato específico
 export MODEL_PATH=models/20260823T135811Z-bed2194376bc/model.joblib
-PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
+uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 ```
 
 Endpoints:
@@ -226,7 +230,7 @@ Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em 
 
 ```bash
 # 1. Suba a API em outro terminal
-PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
+uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # 2. Abra o dashboard
 uv run streamlit run front/app_dev.py
@@ -237,7 +241,7 @@ O dashboard **não** persiste payloads nem textos em disco; valores dos widgets 
 ### Como rodar os testes
 
 ```bash
-uv run pytest             # 80 testes do baseline, artefato, treino, API, idioma e dashboard
+uv run pytest             # baseline, artefato, treino, API, idioma e dashboard
 uv run ruff check .       # lint
 uv run ruff format --check .  # verificação de formatação
 ```

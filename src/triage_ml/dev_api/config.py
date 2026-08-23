@@ -80,7 +80,10 @@ def _load_yaml(path: Path) -> dict:
 def load_api_config(path: Path | None = None) -> ApiConfig:
     """Load and validate the API configuration from a YAML file."""
 
-    data = _load_yaml(path or DEFAULT_CONFIG_PATH)
+    config_path = path or DEFAULT_CONFIG_PATH
+    if path is None and not config_path.exists():
+        return ApiConfig()
+    data = _load_yaml(config_path)
     api_section = data.get("api")
     if api_section is None:
         api_section = {}

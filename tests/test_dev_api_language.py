@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
 from unittest.mock import patch
 
 import joblib
+import numpy as np
 import pytest
+import scipy
+import sklearn
 from fastapi.testclient import TestClient
 
 from triage_ml.dev_api import language as api_language
@@ -94,15 +98,17 @@ def _artifact(tmp_path: Path) -> Path:
                 }
                 for name in ("logreg", "linear_svc")
             },
+            "best_classifier": "logreg",
             "selected_classifier": "logreg",
+            "selection_policy": "highest_mean_macro_f1",
             "test_set_used_for_selection": False,
         },
         dependency_versions={
-            "python": "3.12",
-            "numpy": "2.0",
-            "scipy": "1.0",
-            "scikit_learn": "1.0",
-            "joblib": "1.0",
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
         },
         git_commit="0" * 40,
         git_dirty=False,

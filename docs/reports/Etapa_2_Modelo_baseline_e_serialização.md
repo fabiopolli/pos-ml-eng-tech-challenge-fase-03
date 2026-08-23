@@ -313,10 +313,10 @@ UNSUP 422 unsupported_language det= pt score= 0.9
 uv sync
 
 # 2. Reproduzir treino (compara LR/LinearSVC e seleciona o vencedor)
-PYTHONPATH=src uv run python -m triage_ml.models.train
+uv run triage-ml-train
 
 # 3. Validar saúde da API (descobre o artefato mais recente)
-PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
+uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # 4. Sanidade rápida
 curl -s http://127.0.0.1:8000/health | jq

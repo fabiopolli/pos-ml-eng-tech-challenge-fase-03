@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
+import math
 import platform
 import shutil
 import subprocess
@@ -38,7 +40,6 @@ from triage_ml.data.prepare import prepare_dataset, split_dataset
 from triage_ml.models.artifact import (
     ArtifactPaths,
     build_metadata,
-    file_sha256,
     write_classes,
     write_metadata,
 )
@@ -51,10 +52,11 @@ from triage_ml.models.pipeline import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CONFIG = REPO_ROOT / "configs" / "training.yaml"
-DEFAULT_RAW_CSV = REPO_ROOT / "data" / "medical_tc_train.csv"
-DEFAULT_MODELS_DIR = REPO_ROOT / "models"
-DEFAULT_REPORTS_DIR = REPO_ROOT / "reports" / "figures"
+PROJECT_CONFIG = Path("configs/training.yaml")
+DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "training.yaml"
+DEFAULT_RAW_CSV = Path("data/medical_tc_train.csv")
+DEFAULT_MODELS_DIR = Path("models")
+DEFAULT_REPORTS_DIR = Path("reports/figures")
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -68,6 +70,8 @@ def load_config(path: Path) -> dict[str, Any]:
 def _coerce_tfidf(tfidf: dict[str, Any] | None) -> dict[str, Any] | None:
     if not tfidf:
         return tfidf
+    if not isinstance(tfidf, dict):
+        raise ValueError("tfidf configuration must be a mapping")
     coerced = dict(tfidf)
     if isinstance(coerced.get("ngram_range"), list):
         coerced["ngram_range"] = tuple(coerced["ngram_range"])
@@ -75,8 +79,36 @@ def _coerce_tfidf(tfidf: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def _sha256_json(value: Any) -> str:
-    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    payload = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _require_int(value: object, *, name: str, minimum: int | None = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
+
+
+def _require_fraction(value: object, *, name: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 < value < 1
+    ):
+        raise ValueError(f"{name} must be a finite number between zero and one")
+    return float(value)
+
+
+def _classifier_config(config: dict[str, Any], name: str, random_state: int) -> dict[str, Any]:
+    raw = config.get(name, {})
+    if not isinstance(raw, dict):
+        raise ValueError(f"{name} configuration must be a mapping")
+    return {**raw, "random_state": random_state}
 
 
 def dataframe_fingerprint(data: pd.DataFrame) -> str:
@@ -90,6 +122,8 @@ def dataframe_fingerprint(data: pd.DataFrame) -> str:
 
 
 def _git_state() -> tuple[str, bool]:
+    if not (REPO_ROOT / "pyproject.toml").is_file():
+        return "unknown", True
     try:
         commit_result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -128,17 +162,14 @@ def compare_classifiers(
 ) -> tuple[str, dict[str, Any]]:
     """Compare candidates only on training folds and fix the final classifier."""
 
-    folds = int(config.get("cv_folds", 5))
-    if folds < 2:
-        raise ValueError("cv_folds must be at least 2")
+    folds = _require_int(config.get("cv_folds", 5), name="cv_folds", minimum=2)
     class_counts = train_df["target"].value_counts()
     if class_counts.empty or int(class_counts.min()) < folds:
         raise ValueError("each class must contain at least cv_folds training rows")
     cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=random_state)
     scores: dict[str, dict[str, Any]] = {}
     for name in VALID_CLASSIFIERS:
-        params = dict(config.get(name, {}))
-        params["random_state"] = random_state
+        params = _classifier_config(config, name, random_state)
         pipeline = build_pipeline(
             name,
             tfidf=_coerce_tfidf(config.get("tfidf")),
@@ -242,12 +273,17 @@ def plot_top_features(
         return None
     feature_names = tfidf.get_feature_names_out()
     classes = list(getattr(clf, "classes_", labels))
+    coefficients = clf.coef_
+    if len(classes) == 2 and len(coefficients) == 1:
+        class_coefficients = ((classes[0], -coefficients[0]), (classes[1], coefficients[0]))
+    else:
+        class_coefficients = zip(classes, coefficients, strict=True)
     fig, axes = plt.subplots(
         nrows=len(classes), ncols=1, figsize=(8, 1.6 * len(classes)), sharex=True
     )
     if len(classes) == 1:
         axes = [axes]
-    for ax, cls, coefs in zip(axes, classes, clf.coef_, strict=True):
+    for ax, (cls, coefs) in zip(axes, class_coefficients, strict=True):
         top = np.argsort(coefs)[-top_n:][::-1]
         tokens = [feature_names[index] for index in top]
         scores = coefs[top]
@@ -266,7 +302,7 @@ def run_training(
     raw_csv_path: str | Path = DEFAULT_RAW_CSV,
     out_dir: str | Path = DEFAULT_MODELS_DIR,
     figures_dir: str | Path = DEFAULT_REPORTS_DIR,
-    config_path: str | Path = DEFAULT_CONFIG,
+    config_path: str | Path | None = None,
     classifier: str | None = None,
     sample_size: int | None = None,
     test_size: float | None = None,
@@ -274,15 +310,28 @@ def run_training(
 ) -> dict[str, Any]:
     """Run selection, final evaluation, and immutable artifact persistence."""
 
-    config = load_config(Path(config_path))
-    sample = int(config["sample_size"] if sample_size is None else sample_size)
-    test_frac = float(config["test_size"] if test_size is None else test_size)
-    seed = int(config["random_state"] if random_state is None else random_state)
+    selected_config = Path(config_path) if config_path is not None else PROJECT_CONFIG
+    if config_path is None and not selected_config.is_file():
+        selected_config = DEFAULT_CONFIG
+    config = load_config(selected_config)
+    sample = _require_int(
+        config["sample_size"] if sample_size is None else sample_size,
+        name="sample_size",
+        minimum=1,
+    )
+    test_frac = _require_fraction(
+        config["test_size"] if test_size is None else test_size, name="test_size"
+    )
+    seed = _require_int(
+        config["random_state"] if random_state is None else random_state,
+        name="random_state",
+    )
     if classifier is not None and classifier not in VALID_CLASSIFIERS:
         raise ValueError(f"Unsupported classifier {classifier!r}; valid: {VALID_CLASSIFIERS}")
 
     raw_csv_path = Path(raw_csv_path)
-    raw = pd.read_csv(raw_csv_path)
+    raw_csv_bytes = raw_csv_path.read_bytes()
+    raw = pd.read_csv(io.BytesIO(raw_csv_bytes))
     canonical, report = prepare_dataset(raw, sample_size=sample, random_state=seed)
     train_df, test_df = split_dataset(canonical, test_size=test_frac, random_state=seed)
     labels = sorted(int(value) for value in canonical["target"].unique())
@@ -296,8 +345,7 @@ def run_training(
         random_state=seed,
         selected_classifier=classifier,
     )
-    classifier_params = dict(config.get(classifier_name, {}))
-    classifier_params["random_state"] = seed
+    classifier_params = _classifier_config(config, classifier_name, seed)
     pipeline = build_pipeline(
         classifier_name,
         tfidf=_coerce_tfidf(config.get("tfidf")),
@@ -307,17 +355,36 @@ def run_training(
     y_pred = pipeline.predict(test_df["text"])
     metrics = compute_metrics(test_df["target"], y_pred, labels)
 
+    effective_tfidf = {**DEFAULT_TFIDF, **(_coerce_tfidf(config.get("tfidf")) or {})}
+    effective_candidates = {
+        name: {
+            **(DEFAULT_LOGREG if name == "logreg" else DEFAULT_LINEAR_SVC),
+            **_classifier_config(config, name, seed),
+        }
+        for name in VALID_CLASSIFIERS
+    }
+    configured_name = str(config.get("model_name", "triage_ml_tfidf_logreg"))
+    model_name = (
+        configured_name if classifier_name == "logreg" else f"triage_ml_tfidf_{classifier_name}"
+    )
     effective_config = {
-        **config,
         "sample_size": sample,
         "test_size": test_frac,
         "random_state": seed,
+        "cv_folds": selection["folds"],
+        "language": str(config["language"]),
+        "task_type": str(config["task_type"]),
+        "label_mapping": label_mapping,
+        "tfidf": effective_tfidf,
+        "candidates": effective_candidates,
         "selected_classifier": classifier_name,
+        "selection_policy": selection["selection_policy"],
+        "model_name": model_name,
     }
     config_fingerprint = _sha256_json(effective_config)
     prepared_fingerprint = dataframe_fingerprint(canonical)
     fingerprints = {
-        "raw_csv_sha256": file_sha256(raw_csv_path),
+        "raw_csv_sha256": hashlib.sha256(raw_csv_bytes).hexdigest(),
         "prepared_dataset_sha256": prepared_fingerprint,
         "train_split_sha256": dataframe_fingerprint(train_df),
         "test_split_sha256": dataframe_fingerprint(test_df),
@@ -327,22 +394,22 @@ def run_training(
     paths = ArtifactPaths.for_version(out_dir, model_version)
     if paths.version_dir.exists():
         raise FileExistsError(f"artifact version already exists: {paths.version_dir}")
+    figures_root = Path(figures_dir)
+    version_figures_dir = figures_root / model_version
+    if version_figures_dir.exists():
+        raise FileExistsError(f"figure version already exists: {version_figures_dir}")
     staging_paths = ArtifactPaths.for_version(out_dir, f".{model_version}.tmp-{uuid.uuid4().hex}")
     staging_paths.ensure()
-    configured_name = str(config.get("model_name", "triage_ml_tfidf_logreg"))
-    model_name = (
-        configured_name if classifier_name == "logreg" else f"triage_ml_tfidf_{classifier_name}"
-    )
     git_commit, git_dirty = _git_state()
-    effective_tfidf = {**DEFAULT_TFIDF, **(_coerce_tfidf(config.get("tfidf")) or {})}
     classifier_defaults = DEFAULT_LOGREG if classifier_name == "logreg" else DEFAULT_LINEAR_SVC
     effective_classifier_params = {**classifier_defaults, **classifier_params}
-    figures_dir = Path(figures_dir)
-    figures_dir.mkdir(parents=True, exist_ok=True)
     suffix = "lr" if classifier_name == "logreg" else classifier_name
-    cm_path = figures_dir / f"08_confusion_matrix_{suffix}.png"
-    top_path = figures_dir / f"08_top_features_{suffix}.png"
+    cm_path = version_figures_dir / f"08_confusion_matrix_{suffix}.png"
+    top_path = version_figures_dir / f"08_top_features_{suffix}.png"
+    figures_reserved = False
     try:
+        version_figures_dir.mkdir(parents=True, exist_ok=False)
+        figures_reserved = True
         joblib.dump(pipeline, staging_paths.joblib)
         persisted_classes = write_classes(staging_paths.classes, pipeline.classes_)
         metadata = build_metadata(
@@ -378,36 +445,50 @@ def run_training(
         write_metadata(staging_paths.metadata, metadata)
         plot_confusion_matrix(test_df["target"], y_pred, labels, cm_path)
         top_path = plot_top_features(pipeline, labels, top_path)
+        summary = {
+            "model_version": model_version,
+            "model_name": model_name,
+            "classifier": classifier_name,
+            "paths": {
+                "joblib": str(paths.joblib),
+                "classes": str(paths.classes),
+                "metadata": str(paths.metadata),
+                "summary": str(paths.version_dir / "summary.json"),
+                "confusion_matrix": str(cm_path),
+                "top_features": str(top_path) if top_path else None,
+            },
+            "selection": selection,
+            "metrics": metrics,
+            "n_train": len(train_df),
+            "n_test": len(test_df),
+            "preparation_report": {
+                "input_rows": report.input_rows,
+                "missing_or_empty_rows": report.missing_or_empty_rows,
+                "conflicting_texts": report.conflicting_texts,
+                "conflicting_rows": report.conflicting_rows,
+                "duplicate_rows": report.duplicate_rows,
+                "eligible_rows": report.eligible_rows,
+                "output_rows": report.output_rows,
+            },
+            "metadata": metadata,
+        }
+        (staging_paths.version_dir / "summary.json").write_text(
+            json.dumps(
+                summary,
+                indent=2,
+                ensure_ascii=False,
+                allow_nan=False,
+                default=_json_default,
+            ),
+            encoding="utf-8",
+        )
         staging_paths.version_dir.rename(paths.version_dir)
     except Exception:
         shutil.rmtree(staging_paths.version_dir, ignore_errors=True)
+        if figures_reserved:
+            shutil.rmtree(version_figures_dir, ignore_errors=True)
         raise
-    return {
-        "model_version": model_version,
-        "model_name": model_name,
-        "classifier": classifier_name,
-        "paths": {
-            "joblib": str(paths.joblib),
-            "classes": str(paths.classes),
-            "metadata": str(paths.metadata),
-            "confusion_matrix": str(cm_path),
-            "top_features": str(top_path) if top_path else None,
-        },
-        "selection": selection,
-        "metrics": metrics,
-        "n_train": len(train_df),
-        "n_test": len(test_df),
-        "preparation_report": {
-            "input_rows": report.input_rows,
-            "missing_or_empty_rows": report.missing_or_empty_rows,
-            "conflicting_texts": report.conflicting_texts,
-            "conflicting_rows": report.conflicting_rows,
-            "duplicate_rows": report.duplicate_rows,
-            "eligible_rows": report.eligible_rows,
-            "output_rows": report.output_rows,
-        },
-        "metadata": metadata,
-    }
+    return summary
 
 
 def _json_default(obj: Any) -> Any:
@@ -436,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--raw-csv", default=str(DEFAULT_RAW_CSV))
     parser.add_argument("--out-dir", default=str(DEFAULT_MODELS_DIR))
     parser.add_argument("--figures-dir", default=str(DEFAULT_REPORTS_DIR))
-    parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--config", default=None)
     parser.add_argument("--summary-json", default=None)
     args = parser.parse_args(argv)
     summary = run_training(
@@ -447,15 +528,17 @@ def main(argv: list[str] | None = None) -> int:
         classifier=args.classifier,
     )
     print(_format_summary(summary), file=sys.stdout)
-    summary_path = (
-        Path(args.summary_json)
-        if args.summary_json
-        else Path(summary["paths"]["metadata"]).with_name("summary.json")
-    )
-    summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False, default=_json_default),
-        encoding="utf-8",
-    )
+    if args.summary_json:
+        Path(args.summary_json).write_text(
+            json.dumps(
+                summary,
+                indent=2,
+                ensure_ascii=False,
+                allow_nan=False,
+                default=_json_default,
+            ),
+            encoding="utf-8",
+        )
     return 0
 
 

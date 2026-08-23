@@ -41,6 +41,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import streamlit as st
@@ -51,6 +52,7 @@ PAGE_ICON = "🧪"
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT_SECONDS = 10.0
 SUCCESS_STATUS = 200
+MAX_ERROR_BODY_CHARS = 2_000
 
 # Absolute path to the repo root. Used by the dashboard tests to confirm
 # the dashboard is rooted one level under the project tree.
@@ -122,7 +124,7 @@ def _request_json(
 
     response = requests.request(
         method=method,
-        url=url,
+        url=_normalize_api_url(url),
         json=payload,
         timeout=REQUEST_TIMEOUT_SECONDS,
         headers={"Accept": "application/json"},
@@ -131,15 +133,38 @@ def _request_json(
     elapsed_ms = response.elapsed.total_seconds() * 1000.0
     try:
         parsed = response.json()
-        body = parsed if isinstance(parsed, dict) else {"raw_json": parsed}
+        if not isinstance(parsed, dict):
+            raise ValueError("API response must be a JSON object")
+        body = parsed
     except ValueError:
-        body = {"raw": response.text}
+        body = {"raw": response.text[:MAX_ERROR_BODY_CHARS]}
     return ApiResponse(
         status_code=response.status_code,
         body=body,
         headers={k: v for k, v in response.headers.items()},
         elapsed_ms=elapsed_ms,
     )
+
+
+def _normalize_api_url(url: str) -> str:
+    """Accept only explicit HTTP(S) URLs without credentials or URL ambiguity."""
+
+    candidate = url.strip().rstrip("/")
+    parsed = urlsplit(candidate)
+    try:
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("API URL has an invalid port") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("API URL must be HTTP(S) without credentials, query, or fragment")
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
 
 
 def _check_health(api_url: str) -> ApiResponse:
@@ -398,7 +423,11 @@ def main() -> None:
             value=DEFAULT_API_URL,
             help="Ex.: http://127.0.0.1:8000 (local), http://api.cloud.run.app",
         )
-        api_url = api_url.rstrip("/")
+        try:
+            api_url = _normalize_api_url(api_url)
+        except ValueError as exc:
+            st.error(str(exc))
+            st.stop()
         previous_api_url = st.session_state.get("cached_api_url")
         if previous_api_url != api_url:
             for key in ("models_payload", "model_info_payload", "model_picker_selection"):
@@ -407,10 +436,7 @@ def main() -> None:
             st.session_state["force_models_list"] = True
             st.session_state["force_model_info"] = True
             st.session_state["force_health"] = True
-        st.caption(
-            "Suba a API local com "
-            "`PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --reload`."
-        )
+        st.caption("Suba a API local com `uv run uvicorn triage_ml.dev_api.app:app --reload`.")
 
         if st.button("🔄 Atualizar health", use_container_width=True):
             st.session_state["force_health"] = True

@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import platform
 from pathlib import Path
+from unittest.mock import patch
 
 import joblib
+import numpy as np
 import pytest
+import scipy
+import sklearn
 from fastapi.testclient import TestClient
 
 from triage_ml.dev_api.app import ModelHolder, create_app
@@ -90,15 +95,17 @@ def _artifact(tmp_path: Path, *, version: str = VERSION) -> Path:
                 }
                 for name in ("logreg", "linear_svc")
             },
+            "best_classifier": "logreg",
             "selected_classifier": "logreg",
+            "selection_policy": "highest_mean_macro_f1",
             "test_set_used_for_selection": False,
         },
         dependency_versions={
-            "python": "3.12",
-            "numpy": "2.0",
-            "scipy": "1.0",
-            "scikit_learn": "1.0",
-            "joblib": "1.0",
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
         },
         git_commit="0" * 40,
         git_dirty=False,
@@ -267,7 +274,7 @@ def test_model_info_returns_validated_manifest(client: TestClient) -> None:
     # Provenance and dependencies survive the round-trip.
     assert body["git_commit"] == "0" * 40
     assert body["git_dirty"] is False
-    assert body["dependency_versions"]["python"] == "3.12"
+    assert body["dependency_versions"]["python"] == platform.python_version()
     assert "created_at" in body
 
 
@@ -331,7 +338,10 @@ def test_list_models_returns_newest_first_and_marks_current(
     assert VERSION_B > VERSION
     holder = ModelHolder(holder_path)
     with TestClient(create_app(holder=holder)) as test_client:
-        response = test_client.get("/models")
+        with patch(
+            "joblib.load", side_effect=AssertionError("must not deserialize during listing")
+        ):
+            response = test_client.get("/models")
     assert response.status_code == 200
     body = response.json()
     assert body["versions"] == [VERSION_B, VERSION]
@@ -390,7 +400,9 @@ def test_reload_swaps_holder_and_health_reflects_new_version(
         before = test_client.get("/health").json()
         assert before["model_version"] == VERSION
 
-        response = test_client.post("/reload", json={"model_version": VERSION_B})
+        with patch("joblib.load", wraps=joblib.load) as mocked_load:
+            response = test_client.post("/reload", json={"model_version": VERSION_B})
+        assert mocked_load.call_count == 1
 
         assert response.status_code == 200
         assert response.json() == {

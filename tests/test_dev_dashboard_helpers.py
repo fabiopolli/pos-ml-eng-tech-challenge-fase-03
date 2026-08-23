@@ -143,7 +143,22 @@ def test_non_object_json_body_is_wrapped(dashboard_module):
     response = _FakeResponse(status_code=502, body=["unexpected"])
     with patch.object(dashboard_module.requests, "request", return_value=response):
         result = dashboard_module._check_health("http://api.example.com")
-    assert result.body == {"raw_json": ["unexpected"]}
+    assert result.body == {"raw": '["unexpected"]'}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///etc/passwd",
+        "http://user:secret@api.example.com",
+        "http://api.example.com?redirect=http://internal",
+        "http://api.example.com#fragment",
+        "not-a-url",
+    ],
+)
+def test_api_url_rejects_ambiguous_or_unsafe_values(dashboard_module, url: str) -> None:
+    with pytest.raises(ValueError, match="API URL"):
+        dashboard_module._check_health(url)
 
 
 def test_request_exception_surfaces_to_caller(dashboard_module):

@@ -67,7 +67,7 @@ são cobertos por testes herméticos em `tests/test_dev_dashboard_helpers.py`.
 
 ```bash
 # 1. Suba a API em outro terminal
-PYTHONPATH=src uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
+uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 
 # 2. Suba o dashboard
 uv run streamlit run front/app_dev.py

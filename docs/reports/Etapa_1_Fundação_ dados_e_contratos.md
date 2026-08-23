@@ -11,12 +11,12 @@ Este relatório registra o que está implementado e versionado em `main` para a 
 
 ## 1. Resumo executivo
 
-- **Dataset escolhido**: *Medical Abstracts TC Corpus* (Schopf et al., NLPIR 2022), publicado em CC BY-SA 3.0. Fonte canônica: [repositório dos autores](https://github.com/sebischair/Medical-Abstracts-TC-Corpus). Não há redistribuição dos CSVs no repositório.
+- **Dataset escolhido**: *Medical Abstracts TC Corpus* (Schopf et al., NLPIR 2022), publicado em CC BY-SA 3.0. Fonte canônica: [repositório dos autores](https://github.com/sebischair/Medical-Abstracts-TC-Corpus). O CSV não está na árvore atual; o histórico não foi reescrito.
 - **Pipeline de preparação**: `triage_ml.data.prepare.prepare_dataset` aplica canonicização, exclusão de textos com targets conflitantes, deduplicação, amostragem estratificada e ordenação determinística. Toda execução devolve um `PreparationReport` com contagens verificáveis.
 - **Recorte reproduzível**: 11.550 linhas de entrada → 0 missing/empty → 4.061 linhas removidas por conflito de label em 1.956 textos únicos → 0 duplicatas no pós-conflito → **7.489 elegíveis** → amostragem estratificada **5.000** com seed 42 → split estratificado 80/20 → **4.000 treino / 1.000 teste** sem leakage.
 - **Schema canônico**: `text` (string, normalizado) e `target` (inteiro em {1..5}). Mapeamento para nomes clínicos vive no `metadata.json` do modelo (a partir da Etapa 2), e não em runtime da API.
 - **EDA**: notebook `notebooks/01_eda.ipynb` (20 células, 9 figuras em `reports/figures/`) — distribuições, comprimento dos textos, palavras mais frequentes por classe, TF-IDF médio por classe e type-token ratio (TTR).
-- **Privacidade operacional**: textos brutos nunca são impressos nem versionados; somente agregados e figuras entram no Git.
+- **Privacidade operacional**: textos brutos não são impressos e foram removidos da árvore atual; somente agregados e figuras devem entrar em novos commits.
 
 ## 2. Decisão de dataset
 
@@ -34,9 +34,10 @@ O Medical Abstracts TC foi escolhido porque oferece **labels públicos, schema s
 
 ### 2.1 Licença e proveniência
 
-- **CC BY-SA 3.0** preservada pelo projeto; o CSV não é redistribuído.
+- **CC BY-SA 3.0** preservada pelo projeto; o CSV foi removido da árvore atual. O histórico
+  não foi reescrito nesta alteração.
 - Atribuição registrada em [`docs/dataset.md`](../dataset.md) e referenciada no `README.md`.
-- O paper original está versionado em [`docs/papers/medical-abstracts-tc-eval-2022.pdf`](../papers/) (commit `8a3694d`) com `README.md` próprio explicando autoria, DOI e uso.
+- O paper original é referenciado pelo [DOI oficial](https://doi.org/10.1145/3582768.3582795); `docs/papers/README.md` explica autoria e registra a remoção da árvore atual.
 
 ### 2.2 Diferença entre labels do enunciado e do dataset
 
@@ -161,18 +162,19 @@ Decisões aplicadas em todo o pipeline de dados (reforçadas pela revisão do Co
 
 | Verificação | Comando | Resultado |
 |---|---|---|
-| Preparação completa em CSV real | `PYTHONPATH=src uv run python -c "from triage_ml.data.prepare import prepare_dataset, split_dataset; ..."` | `PreparationReport` acima; split 4000/1000 sem leakage |
+| Preparação completa em CSV real | `uv run python -c "from triage_ml.data.prepare import prepare_dataset, split_dataset; ..."` | `PreparationReport` acima; split 4000/1000 sem leakage |
 | Notebook 01 executa de ponta a ponta | `uv run jupyter execute notebooks/01_eda.ipynb` | 20 células executadas, 9 figuras regeradas |
-| Integração com a Etapa 2 | `PYTHONPATH=src uv run python -m triage_ml.models.train` | Treino concluído, `metadata.fingerprints.prepared_dataset_sha256` consistente |
+| Integração com a Etapa 2 | `uv run triage-ml-train` | Treino concluído, `metadata.fingerprints.prepared_dataset_sha256` consistente |
 | `ruff check src/triage_ml/data/` | `uv run ruff check src/triage_ml/data/` | Sem erros |
 
-> Testes automatizados específicos para `prepare.py` ainda não foram escritos. Eles estão listados como **pendência** abaixo.
+> `tests/test_data_preparation.py` cobre contrato canônico, conflitos, duplicatas,
+> equivalência Unicode/case-insensitive, parâmetros inválidos, estratificação e leakage.
 
 ## 8. Pendências e trabalho futuro
 
 | Item | Status | Observação |
 |---|---|---|
-| Testes de unidade para `prepare_dataset` e `split_dataset` | Pendente | Recomendado: casos para `ValueError` em `sample_size` fora do range, conflito de labels, duplicatas pré-split e detecção de leakage simulada. Inserir no `tests/test_data_preparation.py`. |
+| Testes de unidade para `prepare_dataset` e `split_dataset` | Concluído | Cobertura em `tests/test_data_preparation.py`, incluindo inputs e parâmetros inválidos. |
 | Versão "bruta" do CSV com checksum registrado | Pendente | Hoje o `raw_csv_sha256` é capturado na hora do treino, mas o script de download ainda não está versionado. |
 | Integração com a DAG do Airflow (Etapa 7) | Pendente | A DAG consumirá `prepare_dataset` via `triage_ml.data.prepare` — interface já estável. |
 | Política de retreino com novos dados | Pendente | Será definida na Etapa 7 com gate humano do Denis. |
@@ -185,7 +187,7 @@ Decisões aplicadas em todo o pipeline de dados (reforçadas pela revisão do Co
 # Salvar em data/medical_tc_train.csv (ignorado pelo Git)
 
 # 2. Validar o pipeline de preparação
-PYTHONPATH=src uv run python -c "
+uv run python -c "
 from triage_ml.data.prepare import prepare_dataset, split_dataset
 import pandas as pd
 raw = pd.read_csv('data/medical_tc_train.csv')

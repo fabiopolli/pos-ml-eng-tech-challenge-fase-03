@@ -52,11 +52,26 @@ LANG_FIXTURES = {
 
 def _require_error(response, *, status_code: int, error_code: str) -> None:
     body = response.json()
-    if response.status_code != status_code or body.get("error_code") != error_code:
+    if (
+        not isinstance(body, dict)
+        or response.status_code != status_code
+        or body.get("error_code") != error_code
+    ):
         raise RuntimeError(
             f"expected HTTP {status_code} {error_code}, got "
-            f"HTTP {response.status_code} {body.get('error_code')}"
+            f"HTTP {response.status_code} "
+            f"{body.get('error_code') if isinstance(body, dict) else 'invalid_json'}"
         )
+
+
+def _response_object(response, *, endpoint: str) -> dict[str, object]:
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise RuntimeError(f"{endpoint} did not return JSON") from exc
+    if not isinstance(body, dict):
+        raise RuntimeError(f"{endpoint} did not return a JSON object")
+    return body
 
 
 def _assert_sanitized(value: object) -> None:
@@ -162,19 +177,19 @@ def main() -> int:
     with TestClient(app_module.app) as client:
         health_resp = client.get("/health")
         health_resp.raise_for_status()
-        health_body = health_resp.json()
+        health_body = _response_object(health_resp, endpoint="/health")
         if not health_body.get("model_loaded"):
             raise RuntimeError("dev API did not load the model")
 
         model_info_resp = client.get("/model-info")
         model_info_resp.raise_for_status()
-        model_info_body = model_info_resp.json()
+        model_info_body = _response_object(model_info_resp, endpoint="/model-info")
 
         predict_records: list[dict[str, object]] = []
         for text in FIXTURES:
             resp = client.post("/predict", json={"text": text})
             resp.raise_for_status()
-            payload = resp.json()
+            payload = _response_object(resp, endpoint="/predict")
             if payload.get("request_id") != resp.headers.get("x-request-id"):
                 raise RuntimeError("prediction request ID does not match X-Request-ID")
             timing = resp.headers.get("server-timing", "")
@@ -205,7 +220,9 @@ def main() -> int:
 
         models_resp = client.get("/models")
         models_resp.raise_for_status()
-        models_body = models_resp.json()
+        models_body = _response_object(models_resp, endpoint="/models")
+        if not isinstance(models_body.get("versions"), list):
+            raise RuntimeError("/models response is missing versions")
 
         reload_target = next(
             (
@@ -224,7 +241,7 @@ def main() -> int:
                     f"reload to alternate version returned HTTP "
                     f"{reload_success_resp.status_code}, expected 200"
                 )
-            reload_success_body = reload_success_resp.json()
+            reload_success_body = _response_object(reload_success_resp, endpoint="/reload")
 
         reload_not_found_resp = client.post(
             "/reload",
@@ -235,7 +252,7 @@ def main() -> int:
                 f"reload to unknown version returned HTTP "
                 f"{reload_not_found_resp.status_code}, expected 404"
             )
-        reload_not_found_body = reload_not_found_resp.json()
+        reload_not_found_body = _response_object(reload_not_found_resp, endpoint="/reload")
 
     # Strict-mode run uses deterministic normalized probabilities so both
     # policy rejection branches remain reproducible.
@@ -272,18 +289,23 @@ def main() -> int:
         "empty_text_request": empty_record,
     }
     _assert_sanitized(evidence)
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=EVIDENCE_DIR,
-        prefix=".api-dev-",
-        suffix=".tmp",
-        delete=False,
-    ) as handle:
-        temporary_path = Path(handle.name)
-        json.dump(evidence, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
-    temporary_path.replace(EVIDENCE_FILE)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=EVIDENCE_DIR,
+            prefix=".api-dev-",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            json.dump(evidence, handle, indent=2, ensure_ascii=False, allow_nan=False)
+            handle.write("\n")
+        temporary_path.replace(EVIDENCE_FILE)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     print(f"health: {health_body}")
     print(f"wrote {EVIDENCE_FILE} ({EVIDENCE_FILE.stat().st_size} bytes)")
     return 0

@@ -10,15 +10,15 @@ Similarity-Based Approaches* (NLPIR 2022, publicado em 2023), DOI
 [10.1145/3582768.3582795](https://doi.org/10.1145/3582768.3582795).
 
 A cópia do Kaggle usada durante a exploração não é a referência de proveniência. O
-arquivo original de treino possui 11.550 linhas; o repositório do projeto não redistribui
-esse CSV.
+arquivo original de treino possui 11.550 linhas; o CSV foi removido da árvore atual deste
+repositório, sem reescrita do histórico nesta alteração.
 
 ## Licença e uso
 
 A fonte canônica distribui o corpus sob **Creative Commons Attribution-ShareAlike 3.0
 Unported (CC BY-SA 3.0)**. Uso e redistribuição exigem atribuição, indicação de alterações
 e compartilhamento de adaptações sob licença compatível. O projeto mantém a referência à
-licença original e não inclui os textos no Git.
+licença original e não inclui os textos na árvore atual do Git.
 
 Embora o corpus contenha abstracts médicos, ele é um conjunto de literatura científica,
 não um prontuário clínico como o MIMIC-III. Ainda assim, textos não devem ser enviados a
@@ -60,16 +60,16 @@ Os labels são categorias clínicas, não níveis ordenados de gravidade:
 `triage_ml.data.prepare.prepare_dataset` aplica, nesta ordem:
 
 1. normalização de espaços e remoção de linhas vazias;
-2. exclusão de todo texto associado a mais de um target;
-3. deduplicação por texto normalizado;
+2. exclusão de todo texto Unicode/case-insensitive equivalente associado a mais de um target;
+3. deduplicação pela mesma chave textual normalizada;
 4. amostragem estratificada de 5.000 registros com seed 42;
 5. ordenação determinística e schema `text`, `target`.
 
 Textos com labels conflitantes são excluídos porque escolher um label automaticamente
 não seria defensável. O relatório retornado pela função registra todas as exclusões.
 
-O split usa seed 42, estratificação por target e exige unicidade de texto. Uma asserção
-confirma que nenhum texto exato aparece simultaneamente em treino e teste.
+O split usa seed 42, estratificação por target e exige unicidade pela chave normalizada.
+Uma asserção confirma que nenhum texto equivalente aparece simultaneamente em treino e teste.
 
 ## Obtenção local
 

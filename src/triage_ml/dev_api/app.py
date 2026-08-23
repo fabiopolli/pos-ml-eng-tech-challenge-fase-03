@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import threading
 import time
 import uuid
@@ -44,14 +43,12 @@ from triage_ml.dev_api.schemas import (
 )
 from triage_ml.models.artifact import (
     load_artifact,
-    read_metadata,
-    validate_metadata,
-    verify_artifact_integrity,
+    validate_artifact_bundle,
+    validate_model_version,
 )
 
 logger = logging.getLogger("triage_ml.dev_api")
 REPO_ROOT = Path(__file__).resolve().parents[3]
-VERSION_DIR_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}$")
 
 
 def _default_model_path() -> Path:
@@ -65,8 +62,10 @@ def _default_model_path() -> Path:
 def _validated_model_path(models_dir: Path, version: str) -> Path:
     """Resolve a complete artifact without allowing registry symlink escapes."""
 
-    if not VERSION_DIR_PATTERN.fullmatch(version):
-        raise FileNotFoundError(f"unknown model version: {version!r}")
+    try:
+        validate_model_version(version)
+    except ValueError as exc:
+        raise FileNotFoundError(f"unknown model version: {version!r}") from exc
     root = models_dir.resolve()
     version_dir = models_dir / version
     joblib_path = version_dir / "model.joblib"
@@ -82,11 +81,7 @@ def _validated_model_path(models_dir: Path, version: str) -> Path:
     resolved_joblib = joblib_path.resolve()
     if not resolved_joblib.is_relative_to(root):
         raise FileNotFoundError(f"unknown model version: {version!r}")
-    metadata = read_metadata(metadata_path)
-    validate_metadata(metadata)
-    if metadata["model_version"] != version:
-        raise RuntimeError("artifact directory does not match metadata.model_version")
-    verify_artifact_integrity(joblib_path=resolved_joblib, metadata=metadata)
+    validate_artifact_bundle(resolved_joblib)
     return resolved_joblib
 
 
@@ -104,11 +99,11 @@ def _list_model_versions(models_dir: Path | None = None) -> list[str]:
         return []
     versions: list[str] = []
     for path in models_dir.iterdir():
-        if path.is_symlink() or not path.is_dir() or not VERSION_DIR_PATTERN.fullmatch(path.name):
+        if path.is_symlink() or not path.is_dir():
             continue
         try:
             _validated_model_path(models_dir, path.name)
-        except (OSError, ValueError, RuntimeError):
+        except Exception:
             continue
         versions.append(path.name)
     return sorted(versions, reverse=True)
@@ -139,11 +134,11 @@ class ModelHolder:
             self.label_names = label_names
             self.model_version = metadata["model_version"]
 
-    def reload_to(self, version: str) -> None:
+    def reload_to(self, version: str) -> str:
         """Atomically swap the holder to a different immutable artifact version.
 
         The new path is resolved against the holder's registry root and
-        must obey ``VERSION_DIR_PATTERN``; ``load_artifact`` re-runs the
+        must obey the immutable version schema; ``load_artifact`` re-runs the
         full validation (manifest, checksum, classes) before the swap
         actually commits, so the holder never observes a half-loaded
         state. Raises ``FileNotFoundError`` if the version is unknown
@@ -151,8 +146,6 @@ class ModelHolder:
         the artifact is incompatible.
         """
 
-        if not VERSION_DIR_PATTERN.fullmatch(version):
-            raise FileNotFoundError(f"unknown model version: {version!r}")
         new_path = _validated_model_path(self.registry_root, version)
         # ``load_artifact`` is responsible for the validation; on success
         # it returns the pipeline + metadata we need to publish.
@@ -164,6 +157,7 @@ class ModelHolder:
             self.label_names = label_names
             self.model_version = metadata["model_version"]
             self.model_path = new_path
+            return self.model_version
 
     def snapshot(self) -> tuple[Any, dict[str, Any], dict[int, str], str | None]:
         """Return one consistent model state for the duration of a request."""
@@ -350,7 +344,7 @@ def create_app(
 
         version = payload.model_version
         try:
-            holder.reload_to(version)
+            published_version = holder.reload_to(version)
         except FileNotFoundError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -362,9 +356,8 @@ def create_app(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="model_incompatible",
             ) from exc
-        _, _, _, model_version = holder.snapshot()
-        logger.info("model reload to %s succeeded", model_version)
-        return ReloadOut(model_version=model_version or "", model_loaded=holder.loaded)
+        logger.info("model reload to %s succeeded", published_version)
+        return ReloadOut(model_version=published_version, model_loaded=True)
 
     @app.post("/predict", response_model=PredictOut)
     def predict(payload: PredictIn, request: Request) -> PredictOut:
