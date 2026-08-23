@@ -1,0 +1,74 @@
+{
+  "endpoint": "/predict (smoke API)",
+  "health": {
+    "status": "ok",
+    "model_version": "v1",
+    "model_loaded": true
+  },
+  "predictions": [
+    {
+      "label": 1,
+      "label_name": "neoplasms",
+      "score": 0.4844231321130232,
+      "model_version": "v1",
+      "latency_ms": 10.965876001137076,
+      "request_id": "3b4f0ed75e1b",
+      "warnings": [],
+      "headers_x_request_id": "3b4f0ed75e1b"
+    },
+    {
+      "label": 4,
+      "label_name": "cardiovascular diseases",
+      "score": 0.5496698898686027,
+      "model_version": "v1",
+      "latency_ms": 1.779500000338885,
+      "request_id": "d74113a283d1",
+      "warnings": [],
+      "headers_x_request_id": "d74113a283d1"
+    },
+    {
+      "label": 1,
+      "label_name": "neoplasms",
+      "score": 0.3927883631170643,
+      "model_version": "v1",
+      "latency_ms": 0.9610859997337684,
+      "request_id": "4418be4b774f",
+      "warnings": [],
+      "headers_x_request_id": "4418be4b774f"
+    },
+    {
+      "label": 5,
+      "label_name": "general pathological conditions",
+      "score": 0.32322576045471063,
+      "model_version": "v1",
+      "latency_ms": 0.8056699989538174,
+      "request_id": "1f800f507f56",
+      "warnings": [],
+      "headers_x_request_id": "1f800f507f56"
+    },
+    {
+      "label": 5,
+      "label_name": "general pathological conditions",
+      "score": 0.3454079773983357,
+      "model_version": "v1",
+      "latency_ms": 1.2225859991303878,
+      "request_id": "92cb09e91e67",
+      "warnings": [],
+      "headers_x_request_id": "92cb09e91e67"
+    }
+  ],
+  "empty_text_request": {
+    "status_code": 422,
+    "body": {
+      "request_id": "18a3e866b537",
+      "error_code": "validation_failed",
+      "message": "Request body is invalid."
+    },
+    "headers_x_request_id": "18a3e866b537"
+  },
+  "custom_request_id": {
+    "status_code": 200,
+    "headers_x_request_id": "rid-test-1",
+    "body_request_id": "rid-test-1"
+  }
+}
