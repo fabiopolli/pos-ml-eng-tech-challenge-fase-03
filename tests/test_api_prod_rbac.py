@@ -5,12 +5,11 @@ from fastapi.testclient import TestClient
 
 from triage_ml.api.app import create_app
 from triage_ml.api.settings import Settings, get_settings
-from triage_ml.dev_api.app import ModelHolder
 
-
-# --- Mocks para isolar o teste do modelo real no disco ---
 
 class DummyPipeline:
+    """Minimal deterministic pipeline used to isolate HTTP authorization tests."""
+
     classes_ = [1, 2, 3]
 
     def predict(self, texts: list[str]) -> list[int]:
@@ -20,22 +19,30 @@ class DummyPipeline:
         return [[0.8, 0.1, 0.1]]
 
 
-class DummyHolder(ModelHolder):
-    """Emula o ModelHolder sem tocar o filesystem ou necessitar de artefatos reais."""
+class DummyHolder:
+    """Model holder test double that never touches the filesystem."""
 
     def __init__(self) -> None:
-        self.loaded = True
         self.pipeline = DummyPipeline()
         self.metadata = {"language": "en"}
         self.label_names = {1: "neoplasms", 2: "other", 3: "other"}
-        self.model_version = "20260823T120000Z-dummy"
+        self.model_version = "20260823T120000Z-0123456789ab"
         self.registry_root = "/tmp/models"
 
-    def snapshot(self) -> tuple:
+    def load(self) -> None:
+        """The production lifespan calls load; this double is already ready."""
+
+    @property
+    def loaded(self) -> bool:
+        return self.pipeline is not None
+
+    def reload_to(self, version: str) -> str:
+        self.model_version = version
+        return version
+
+    def snapshot(self) -> tuple[DummyPipeline, dict[str, str], dict[int, str], str]:
         return self.pipeline, self.metadata, self.label_names, self.model_version
 
-
-# --- Configuração Explícita ---
 
 def get_test_settings() -> Settings:
     return Settings(
@@ -47,67 +54,72 @@ def get_test_settings() -> Settings:
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """Create a hermetic application with deterministic model and language checks."""
+
+    monkeypatch.setattr("triage_ml.api.app.detect_language", lambda *args, **kwargs: None)
     app = create_app(holder=DummyHolder())
-    # Injeta explicitamente as configurações sem alterar env vars globais (os.environ)
     app.dependency_overrides[get_settings] = get_test_settings
-    
+
     with TestClient(app) as test_client:
         yield test_client
 
 
-# --- Testes de RBAC e Sanitização ---
-
 def test_patient_is_denied_prediction_and_leaks_nothing(client: TestClient) -> None:
-    # O texto é longo o suficiente em inglês para não falhar na checagem de idioma antes do RBAC
     response = client.post(
         "/predict",
         json={"text": "Patient comes in with severe chest pain and cardiovascular issues."},
-        headers={"X-API-Key": "pat-" + "0" * 30}
+        headers={"X-API-Key": "pat-" + "0" * 30},
     )
+
     assert response.status_code == 403
-    
-    body = response.json()
-    assert body["error_code"] == "clinician_review_required"
-    
-    # Valida ausência total de vazamento
-    assert "label" not in body
-    assert "score" not in body
+    assert response.json()["error_code"] == "clinician_review_required"
+    assert "label" not in response.json()
+    assert "score" not in response.json()
     assert "chest pain" not in response.text
 
 
-def test_missing_or_invalid_credential_fails_safe(client: TestClient) -> None:
-    response = client.post("/predict", json={"text": "Dummy text for validation."})
+def test_missing_credential_is_denied(client: TestClient) -> None:
+    response = client.post("/predict", json={"text": "A sufficiently long test message."})
+
     assert response.status_code == 401
     assert response.json()["error_code"] == "unauthorized"
 
 
 def test_doctor_can_predict_but_not_reload(client: TestClient) -> None:
-    # Predição bem-sucedida (Status 200 determinístico graças ao mock)
-    predict_res = client.post(
-        "/predict",
-        json={"text": "We report a patient with an aggressive liver tumor requiring surgery."},
-        headers={"X-API-Key": "doc-" + "0" * 30}
-    )
-    assert predict_res.status_code == 200
-    assert predict_res.json()["label"] == 1
+    headers = {"X-API-Key": "doc-" + "0" * 30}
 
-    # Reload bloqueado (Apenas service pode recarregar)
-    reload_res = client.post(
+    prediction = client.post(
+        "/predict",
+        json={"text": "A patient has a documented cardiovascular condition."},
+        headers=headers,
+    )
+    assert prediction.status_code == 200
+    assert prediction.json()["label"] == 1
+
+    reload_response = client.post(
         "/reload",
-        json={"model_version": "some-version"},
-        headers={"X-API-Key": "doc-" + "0" * 30}
+        json={"model_version": "20260823T120000Z-0123456789ab"},
+        headers=headers,
     )
-    assert reload_res.status_code == 403
-    assert reload_res.json()["error_code"] == "forbidden"
+    assert reload_response.status_code == 403
+    assert reload_response.json()["error_code"] == "forbidden"
 
 
-def test_service_is_denied_prediction(client: TestClient) -> None:
-    # O service gerencia ciclos do modelo, mas não consome predições (restrito a doctor)
-    response = client.post(
+def test_service_can_reload_but_cannot_predict(client: TestClient) -> None:
+    headers = {"X-API-Key": "srv-" + "0" * 30}
+
+    reload_response = client.post(
+        "/reload",
+        json={"model_version": "20260823T120000Z-0123456789ab"},
+        headers=headers,
+    )
+    assert reload_response.status_code == 200
+
+    prediction = client.post(
         "/predict",
-        json={"text": "Cardiovascular pain requiring surgical intervention."},
-        headers={"X-API-Key": "srv-" + "0" * 30}
+        json={"text": "A patient has a documented cardiovascular condition."},
+        headers=headers,
     )
-    assert response.status_code == 403
-    assert response.json()["error_code"] == "forbidden"
+    assert prediction.status_code == 403
+    assert prediction.json()["error_code"] == "forbidden"
