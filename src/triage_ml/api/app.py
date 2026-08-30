@@ -13,7 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from triage_ml.api.auth import RequireRole, get_current_role
 from triage_ml.api.logging_config import setup_logging
-from triage_ml.api.ratelimit import limiter
+from triage_ml.api.ratelimit import create_limiters
 from triage_ml.api.schemas import (
     ErrorOut,
     HealthOut,
@@ -24,7 +24,7 @@ from triage_ml.api.schemas import (
     ReloadIn,
     ReloadOut,
 )
-from triage_ml.api.settings import get_settings
+from triage_ml.api.settings import Settings, get_settings
 from triage_ml.dev_api.app import ModelHolder, _default_model_path, _list_model_versions
 from triage_ml.dev_api.config import get_api_config
 from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
@@ -32,8 +32,14 @@ from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
 logger = structlog.get_logger("triage_ml.api")
 
 
-def create_app(holder: ModelHolder | None = None) -> FastAPI:
-    settings = get_settings()
+def create_app(*, holder: ModelHolder | None = None, settings: Settings | None = None) -> FastAPI:
+    """Build an isolated production API instance.
+
+    ``settings`` is injectable so tests do not depend on process environment
+    variables or share rate-limit state with the module-level ASGI app.
+    """
+
+    settings = settings or get_settings()
     setup_logging(settings.log_level)
 
     if holder is None:
@@ -46,7 +52,9 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
         yield
 
     app = FastAPI(title="Triage ML - Prod API", lifespan=lifespan)
-    app.state.limiter = limiter
+    ip_limiter, api_key_limiter = create_limiters()
+    app.state.limiter = ip_limiter
+    app.state.api_key_limiter = api_key_limiter
 
     @app.middleware("http")
     async def trace_and_timing_middleware(request: Request, call_next):
@@ -161,7 +169,8 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
     # =========================================================================
 
     @app.post("/reload", response_model=ReloadOut)
-    @limiter.limit(get_settings().ratelimit_default)
+    @ip_limiter.limit(settings.ratelimit_default)
+    @api_key_limiter.limit(settings.ratelimit_default)
     def reload_model(
         request: Request, payload: ReloadIn, role: str = Depends(RequireRole(["service"]))
     ):
@@ -175,7 +184,8 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
             raise HTTPException(status_code=500, detail="model_incompatible") from exc
 
     @app.post("/predict", response_model=PredictOut)
-    @limiter.limit(get_settings().ratelimit_predict)
+    @ip_limiter.limit(settings.ratelimit_predict)
+    @api_key_limiter.limit(settings.ratelimit_predict)
     def predict(request: Request, payload: PredictIn, role: str = Depends(get_current_role)):
         # Security Gate: Strict RBAC
         if role == "patient":

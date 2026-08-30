@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="TRIAGE_ML_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_prefix="TRIAGE_ML_", env_file=".env", extra="forbid")
 
     api_key_service: str = Field(min_length=32)
     api_key_doctor: str = Field(min_length=32)
