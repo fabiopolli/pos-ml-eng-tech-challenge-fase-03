@@ -58,7 +58,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     """Create a hermetic application with deterministic model and language checks."""
 
     monkeypatch.setattr("triage_ml.api.app.detect_language", lambda *args, **kwargs: None)
-    app = create_app(holder=DummyHolder())
+    app = create_app(holder=DummyHolder(), settings=get_test_settings())
     app.dependency_overrides[get_settings] = get_test_settings
 
     with TestClient(app) as test_client:
