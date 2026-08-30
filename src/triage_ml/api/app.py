@@ -3,28 +3,34 @@
 import os
 import time
 import uuid
-import structlog
 from contextlib import asynccontextmanager
-from pathlib import Path
 
-from fastapi import FastAPI, Request, status, HTTPException, Depends
+import structlog
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from triage_ml.api.auth import RequireRole, get_current_role
+from triage_ml.api.logging_config import setup_logging
+from triage_ml.api.ratelimit import limiter
 from triage_ml.api.schemas import (
-    PredictIn, PredictOut, HealthOut, ModelInfoOut, ErrorOut,
-    ReloadIn, ReloadOut, ModelsListOut
+    ErrorOut,
+    HealthOut,
+    ModelInfoOut,
+    ModelsListOut,
+    PredictIn,
+    PredictOut,
+    ReloadIn,
+    ReloadOut,
 )
 from triage_ml.api.settings import get_settings
-from triage_ml.api.auth import get_current_role, RequireRole
-from triage_ml.api.ratelimit import limiter
-from triage_ml.api.logging_config import setup_logging
 from triage_ml.dev_api.app import ModelHolder, _default_model_path, _list_model_versions
-from triage_ml.dev_api.language import detect_language, UnsupportedLanguageError
 from triage_ml.dev_api.config import get_api_config
+from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
 
 logger = structlog.get_logger("triage_ml.api")
+
 
 def create_app(holder: ModelHolder | None = None) -> FastAPI:
     settings = get_settings()
@@ -80,7 +86,9 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
         req_id = getattr(request.state, "request_id", "unknown")
         return JSONResponse(
             status_code=422,
-            content=ErrorOut(request_id=req_id, error_code="validation_failed", message="Invalid payload.").model_dump()
+            content=ErrorOut(
+                request_id=req_id, error_code="validation_failed", message="Invalid payload."
+            ).model_dump(),
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -101,9 +109,12 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
         return JSONResponse(
             status_code=exc.status_code,
             content=ErrorOut(
-                request_id=req_id, error_code=error_code, message=message,
-                detected_language=det_lang, detected_language_score=det_score
-            ).model_dump()
+                request_id=req_id,
+                error_code=error_code,
+                message=message,
+                detected_language=det_lang,
+                detected_language_score=det_score,
+            ).model_dump(),
         )
 
     @app.exception_handler(Exception)
@@ -113,7 +124,9 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
         logger.error("internal_error", error_type=type(exc).__name__)
         return JSONResponse(
             status_code=500,
-            content=ErrorOut(request_id=req_id, error_code="internal_error", message="Internal Server Error.").model_dump()
+            content=ErrorOut(
+                request_id=req_id, error_code="internal_error", message="Internal Server Error."
+            ).model_dump(),
         )
 
     # =========================================================================
@@ -126,7 +139,7 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
         return HealthOut(
             status="ok" if holder.loaded else "degraded",
             model_version=model_version,
-            model_loaded=holder.loaded
+            model_loaded=holder.loaded,
         )
 
     @app.get("/model-info", response_model=ModelInfoOut)
@@ -140,8 +153,7 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
     def list_models(request: Request):
         _, _, _, model_version = holder.snapshot()
         return ModelsListOut(
-            versions=_list_model_versions(holder.registry_root), 
-            current=model_version
+            versions=_list_model_versions(holder.registry_root), current=model_version
         )
 
     # =========================================================================
@@ -150,15 +162,17 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
 
     @app.post("/reload", response_model=ReloadOut)
     @limiter.limit(get_settings().ratelimit_default)
-    def reload_model(request: Request, payload: ReloadIn, role: str = Depends(RequireRole(["service"]))):
+    def reload_model(
+        request: Request, payload: ReloadIn, role: str = Depends(RequireRole(["service"]))
+    ):
         try:
             version = holder.reload_to(payload.model_version)
             return ReloadOut(model_version=version, model_loaded=True)
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="model_not_found")
-        except Exception as e:
-            logger.error("reload_failed", error_type=type(e).__name__)
-            raise HTTPException(status_code=500, detail="model_incompatible")
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="model_not_found") from exc
+        except Exception as exc:
+            logger.error("reload_failed", error_type=type(exc).__name__)
+            raise HTTPException(status_code=500, detail="model_incompatible") from exc
 
     @app.post("/predict", response_model=PredictOut)
     @limiter.limit(get_settings().ratelimit_predict)
@@ -177,20 +191,22 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail="model_not_ready")
 
         api_config = get_api_config()
-        
+
         # Etapa de verificação de idioma
         detect_start = time.perf_counter()
         try:
-            lang_check = detect_language(
-                payload.text, min_chars=api_config.min_text_chars_for_language_check,
-                min_score=api_config.min_language_score, supported=api_config.supported_languages
+            detect_language(
+                payload.text,
+                min_chars=api_config.min_text_chars_for_language_check,
+                min_score=api_config.min_language_score,
+                supported=api_config.supported_languages,
             )
         except UnsupportedLanguageError as exc:
             request.state.detect_latency_ms = (time.perf_counter() - detect_start) * 1000.0
             request.state.detected_language = exc.code
             request.state.detected_language_score = exc.score
-            raise HTTPException(status_code=422, detail=exc.reason)
-        
+            raise HTTPException(status_code=422, detail=exc.reason) from exc
+
         request.state.detect_latency_ms = (time.perf_counter() - detect_start) * 1000.0
 
         # Etapa de predição
@@ -202,11 +218,11 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
                 proba = pipeline.predict_proba([payload.text])[0]
                 index = list(pipeline.classes_).index(label)
                 score = float(proba[index])
-        except Exception as e:
+        except Exception as exc:
             request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
-            logger.error("prediction_failed", error_type=type(e).__name__)
-            raise HTTPException(status_code=500, detail="prediction_failed")
-        
+            logger.error("prediction_failed", error_type=type(exc).__name__)
+            raise HTTPException(status_code=500, detail="prediction_failed") from exc
+
         request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
 
         latency = (time.perf_counter() - start) * 1000
@@ -216,10 +232,11 @@ def create_app(holder: ModelHolder | None = None) -> FastAPI:
             score=score,
             model_version=model_version or "unknown",
             latency_ms=latency,
-            request_id=req_id
+            request_id=req_id,
         )
 
     return app
+
 
 # Exporta a instância ASGI para o uvicorn (Ex: uvicorn triage_ml.api.app:app)
 app = create_app()

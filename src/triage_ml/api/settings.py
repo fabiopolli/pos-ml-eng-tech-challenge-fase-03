@@ -1,7 +1,11 @@
 """Environment settings and strict constraints for production API."""
+
+from functools import lru_cache
 from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="TRIAGE_ML_", env_file=".env", extra="ignore")
@@ -13,7 +17,6 @@ class Settings(BaseSettings):
     ratelimit_default: str = "60/minute"
     ratelimit_predict: str = "30/minute"
 
-from functools import lru_cache
 
 @lru_cache
 def get_settings() -> Settings:

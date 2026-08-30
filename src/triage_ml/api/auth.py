@@ -1,11 +1,15 @@
 """Role-Based Access Control and authentication dependencies."""
+
 import hmac
+
 from fastapi import Depends, Header, HTTPException, status
+
 from triage_ml.api.settings import Settings, get_settings
 
+
 def get_current_role(
-    settings: Settings = Depends(get_settings),
-    api_key: str = Header(alias="X-API-Key", default="")
+    settings: Settings = Depends(get_settings),  # noqa: B008
+    api_key: str = Header(alias="X-API-Key", default=""),
 ) -> str:
     if not api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
@@ -20,8 +24,10 @@ def get_current_role(
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unauthorized")
 
+
 class RequireRole:
     """Dependency that ensures the authenticated role is within allowed roles."""
+
     def __init__(self, allowed_roles: list[str]):
         self.allowed_roles = allowed_roles
 

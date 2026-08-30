@@ -4,8 +4,10 @@ This is the canonical source of truth for the HTTP contract.
 """
 
 from __future__ import annotations
+
 from typing import Annotated, Any, Literal
-from pydantic import BaseModel, Field, StringConstraints, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 class PredictIn(BaseModel):

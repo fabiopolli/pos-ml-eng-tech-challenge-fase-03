@@ -1,5 +1,7 @@
-import structlog
 import logging
+
+import structlog
+
 
 def setup_logging(log_level: str = "INFO"):
     structlog.configure(
@@ -8,7 +10,7 @@ def setup_logging(log_level: str = "INFO"):
             structlog.stdlib.add_logger_name,
             structlog.contextvars.merge_contextvars,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer()
+            structlog.processors.JSONRenderer(),
         ],
         wrapper_class=structlog.stdlib.BoundLogger,
         logger_factory=structlog.stdlib.LoggerFactory(),
