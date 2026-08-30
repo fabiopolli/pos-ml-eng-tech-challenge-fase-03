@@ -2,8 +2,7 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-08-23 — revisão de robustez da Fase 1 (dados, artefatos,
-registry, packaging e CI).
+Última atualização: 2026-08-30 — validação de segurança e limite de requisições da API oficial.
 
 ## Visão geral e responsáveis
 
@@ -112,6 +111,12 @@ Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP fu
 - [X] Adicionar testes unitários e de integração.
 - [X] Medir baseline de latência local com metodologia documentada (gancho para a Etapa 5).
 - [ ] Empacotar o serviço em Docker (parte do entregável do Fábio, mas dirigido a esta API).
+
+**Evidência (2026-08-30):** a API oficial aplica RBAC estático com negação padrão,
+limites independentes por IP e fingerprint de chave, e não emite `text` clínico nem
+chaves de API em respostas ou logs. A suíte local possui 120 testes, incluindo
+cenários positivos/negativos de papéis, rate limit, settings estritos e sanitização.
+O baseline HTTP permanece em `reports/benchmarks/api-prod-baseline.json`.
 
 Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta documentado.
 
