@@ -1,8 +1,7 @@
-# Front — Dashboard de desenvolvimento
+# Front — Dashboards Streamlit
 
-Ferramentas de interface voltadas para o desenvolvedor. Não fazem parte
-do runtime da API; existem apenas para acelerar validações manuais da
-API de desenvolvimento (`src/triage_ml/dev_api/`).
+Ferramentas de interface Streamlit. Elas não fazem parte do runtime da API:
+existem para validação manual e demonstração do Tech Challenge.
 
 Use o dashboard somente em localhost. Ele aceita uma URL informada pelo
 usuário e envia textos para esse destino; não é uma interface pública.
@@ -87,3 +86,48 @@ Acesse `http://localhost:8501`.
 - Persistência entre sessões — o model picker é por-design em
   memória; ao reiniciar o Streamlit, a escolha volta ao default
   (versão atualmente em uso na API).
+
+## `app_prod.py` — portal clínico com RBAC
+
+Dashboard separado para demonstrar a API oficial (`src/triage_ml/api/`)
+no vídeo STAR. Tem uma tela de login e duas experiências distintas:
+
+- **Médico**: o processo Streamlit chama `POST /predict` com a chave de médico
+  configurada no ambiente e apresenta a resposta da API para apoio à triagem.
+- **Paciente**: não recebe chave médica e **nunca chama** `/predict`; vê somente
+  o estado público da API e a mensagem de que a revisão clínica é necessária.
+
+O login é deliberadamente uma demonstração local baseada em credenciais de
+ambiente. Ele não substitui um provedor de identidade (OIDC/Identity Platform)
+em nuvem. As senhas e a API key ficam no processo Streamlit, nunca no código,
+na URL, no estado da sessão ou no navegador.
+
+### Como rodar localmente (PowerShell)
+
+Em um primeiro terminal, suba a API oficial com as chaves configuradas:
+
+```powershell
+$env:TRIAGE_ML_API_KEY_SERVICE = "srv-..."
+$env:TRIAGE_ML_API_KEY_DOCTOR = "doc-..."
+$env:TRIAGE_ML_API_KEY_PATIENT = "pat-..."
+$env:MODEL_PATH = "C:\caminho\para\models\<versao>\model.joblib"
+uv run uvicorn triage_ml.api.app:app --host 127.0.0.1 --port 8000
+```
+
+Em outro terminal, use a **mesma chave de médico** e defina credenciais de
+demonstração que não devem ser versionadas:
+
+```powershell
+$env:TRIAGE_ML_PROD_API_URL = "http://127.0.0.1:8000"
+$env:TRIAGE_ML_API_KEY_DOCTOR = "doc-..."
+$env:TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME = "medico-demo"
+$env:TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD = "uma-senha-local-forte"
+$env:TRIAGE_ML_DASHBOARD_PATIENT_USERNAME = "paciente-demo"
+$env:TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD = "outra-senha-local-forte"
+
+uv run streamlit run front/app_prod.py
+```
+
+Abra `http://localhost:8501`. Para o vídeo, entre uma vez como paciente para
+mostrar o bloqueio clínico e outra como médico para executar uma predição com
+texto sintético em inglês. Não use laudos reais na demonstração.

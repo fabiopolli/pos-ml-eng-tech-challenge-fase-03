@@ -114,9 +114,11 @@ Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP fu
 
 **Evidência (2026-08-30):** a API oficial aplica RBAC estático com negação padrão,
 limites independentes por IP e fingerprint de chave, e não emite `text` clínico nem
-chaves de API em respostas ou logs. A suíte local possui 120 testes, incluindo
-cenários positivos/negativos de papéis, rate limit, settings estritos e sanitização.
-O baseline HTTP permanece em `reports/benchmarks/api-prod-baseline.json`.
+chaves de API em respostas ou logs. O portal Streamlit `front/app_prod.py` demonstra
+login médico/paciente, mantém a chave médica no processo servidor e nunca chama
+`/predict` na sessão de paciente. A suíte local possui 130 testes, incluindo cenários
+positivos/negativos de papéis, rate limit, settings estritos, sanitização e helpers
+do portal. O baseline HTTP permanece em `reports/benchmarks/api-prod-baseline.json`.
 
 Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta documentado.
 
