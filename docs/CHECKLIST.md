@@ -105,12 +105,12 @@ Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP fu
 
 ### API FastAPI — Romário
 
-- [ ] Validar contrato de `POST /predict` (já alinhado com a API de desenvolvimento de Bill).
-- [ ] Implementar health check, predição, validação e erros com base no artefato real, sem stub.
-- [ ] Carregar artefato do modelo de forma configurável (env `MODEL_PATH`).
-- [ ] Manter `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` herdados da Etapa 2.
-- [ ] Adicionar testes unitários e de integração.
-- [ ] Medir baseline de latência local com metodologia documentada (gancho para a Etapa 5).
+- [X] Validar contrato de `POST /predict` (já alinhado com a API de desenvolvimento de Bill).
+- [X] Implementar health check, predição, validação e erros com base no artefato real, sem stub.
+- [X] Carregar artefato do modelo de forma configurável (env `MODEL_PATH`).
+- [X] Manter `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` herdados da Etapa 2.
+- [X] Adicionar testes unitários e de integração.
+- [X] Medir baseline de latência local com metodologia documentada (gancho para a Etapa 5).
 - [ ] Empacotar o serviço em Docker (parte do entregável do Fábio, mas dirigido a esta API).
 
 Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta documentado.
