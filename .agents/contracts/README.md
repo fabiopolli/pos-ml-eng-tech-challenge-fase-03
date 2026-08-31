@@ -33,6 +33,10 @@ Contrato inicial proposto, sujeito a validação por Romário:
 - respostas de predição expõem `X-Request-ID` e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>`;
 - a checagem local usa `LanguageIdentifier(norm_probs=True)` e a allow-list deve coincidir com o idioma declarado no manifesto.
 
+- **RBAC Estático e Proteção Clínica:** Validado por chave de API (header `X-API-Key`). Papel `patient` está restrito via `HTTP 403` a visualizar outputs da rota de predição (`POST /predict`), impedindo exposição sem revisão médica. Logs e respostas rejeitadas são estritamente sanitizadas contra vazamento de `text`.
+- `POST /reload` restrito exclusivamente para o papel do sistema interserviços (`service`).
+- As rotas protegidas aplicam limite independente por IP e por fingerprint SHA-256 da chave de API; a chave em texto puro nunca é usada como identificador, nem aparece em logs ou respostas.
+
 ## Observabilidade
 
 - total de requisições por rota/status;

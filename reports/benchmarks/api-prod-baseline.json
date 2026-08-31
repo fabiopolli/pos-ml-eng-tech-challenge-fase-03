@@ -1,0 +1,30 @@
+{
+  "methodology": {
+    "client": "requests (HTTP via rede)",
+    "warmup_requests": 50,
+    "measured_requests": 500,
+    "payload_size_chars": 131,
+    "base_url": "http://127.0.0.1:8000",
+    "rate_limit_predict": "1000/minute"
+  },
+  "environment": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "python_version": "3.12.2",
+    "dependency_versions": {
+      "python": "3.12.2",
+      "numpy": "2.5.2",
+      "scipy": "1.18.0",
+      "scikit_learn": "1.9.0",
+      "joblib": "1.5.3"
+    }
+  },
+  "model": {
+    "model_version": "20260824T202622Z-f2cb6f23f9cd"
+  },
+  "metrics": {
+    "mean_latency_ms": 22.176085800000692,
+    "p50_latency_ms": 28.889750000075765,
+    "p95_latency_ms": 31.88050000013618,
+    "p99_latency_ms": 32.79828699990048
+  }
+}
