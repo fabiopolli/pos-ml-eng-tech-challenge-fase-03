@@ -3,6 +3,9 @@
 Ferramentas de interface Streamlit. Elas não fazem parte do runtime da API:
 existem para validação manual e demonstração do Tech Challenge.
 
+Para uma sequência reproduzível de demonstração e gravação, consulte o
+[`Guia de uso dos fronts`](../docs/guides/GUIA-USO-FRONTS.md).
+
 Use o dashboard somente em localhost. Ele aceita uma URL informada pelo
 usuário e envia textos para esse destino; não é uma interface pública.
 
