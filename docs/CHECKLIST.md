@@ -2,7 +2,7 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-09-05 — API em Docker e jornada do portal com testes E2E validadas localmente.
+Última atualização: 2026-09-05 — API e dois fronts validados em uma stack Docker local.
 
 ## Visão geral e responsáveis
 
@@ -134,6 +134,7 @@ Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta 
 - [x] Ampliar testes conforme API, modelo, front e DAG forem integrados.
 - [x] Testar o portal no Chromium com Playwright e preservar evidências de falha no CI.
 - [x] Criar Dockerfile funcional para inferência (imagem da API oficial).
+- [x] Empacotar portal por papel e dashboard técnico em targets Docker reproduzíveis.
 - [x] Adicionar build da imagem ao CI.
 - [x] Documentar execução local e no CI.
 - [ ] Confirmar primeiro workflow verde no GitHub.
@@ -153,6 +154,12 @@ pendente até a execução do workflow no PR.
 140 testes aprovados (1 teste de symlink desconsiderado por privilégio do Windows). Detalhes
 e comandos em `docs/reports/Etapa_4_CI_CD_Docker.md`. O aceite remoto permanece pendente até
 o novo job `container` concluir verde no GitHub Actions.
+
+**Evidência da stack 2026-09-05:** `api-prod`, `portal-prod` e `dashboard-dev`
+construídos e iniciados pelo Compose com healthchecks saudáveis, UID `10001:10001` e
+filesystem somente leitura. A API carregou o artefato real do Airflow; portal e dashboard
+responderam HTTP 200 nas portas 8501 e 8502. O smoke test médico retornou a classe
+cardiovascular usando a chave fornecida somente em runtime.
 
 ## Etapa 5 — Otimização do modelo (Bill)
 

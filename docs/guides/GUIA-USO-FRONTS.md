@@ -17,6 +17,20 @@ oferecidos ao paciente.
 
 ## Preparação
 
+### Via Docker Compose
+
+Preencha as chaves, credenciais do portal e `API_MODEL_PATH` no `.env` conforme
+`.env.example`, então execute:
+
+```powershell
+docker compose up --build -d --wait api-prod portal-prod dashboard-dev
+```
+
+Acesse o portal em `http://localhost:8501` e o dashboard técnico em
+`http://localhost:8502`. Para encerrar, use `docker compose down`.
+
+### Via processos locais
+
 Suba a API oficial em `http://127.0.0.1:8000` com o modelo e as chaves descritos
 no README principal. Em outro terminal PowerShell, configure o portal:
 

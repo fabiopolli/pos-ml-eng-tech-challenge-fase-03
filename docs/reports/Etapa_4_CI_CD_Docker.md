@@ -4,7 +4,7 @@ Responsável: Fábio Polli.
 
 ## Escopo entregue
 
-- imagem multi-stage da API oficial em Python 3.12;
+- imagens multi-stage da API oficial e dos dois fronts Streamlit em Python 3.12;
 - dependências reproduzidas a partir de `uv.lock`;
 - versões de NumPy, SciPy, scikit-learn e joblib alinhadas ao manifesto do modelo;
 - processo Uvicorn com um worker e usuário sem privilégios (`uid=10001`);
@@ -15,6 +15,10 @@ Responsável: Fábio Polli.
 - chaves obrigatórias fornecidas apenas em runtime;
 - job de CI para construir a imagem e importar a aplicação ASGI;
 - testes automatizados das proteções estruturais do Dockerfile e Compose.
+- Compose com `api-prod`, `portal-prod` e `dashboard-dev`, todos com healthcheck,
+  usuário não-root e filesystem somente leitura;
+- dashboard técnico configurável por ambiente para acessar a API e enviar as chaves
+  de médico/serviço somente no processo servidor.
 
 Prometheus e Grafana não fazem parte desta fatia. Eles serão integrados pelo responsável
 pela observabilidade, estendendo o Compose existente.
@@ -27,14 +31,16 @@ Executada em 2026-09-05 com o artefato
 | Verificação | Resultado |
 |---|---|
 | Build multi-stage | sucesso |
-| Tamanho da imagem | 288.751.935 bytes (aprox. 289 MB) |
-| Healthcheck Docker | `healthy` |
+| Tamanho das imagens | API 288.764.136 bytes; cada front 288.805.684 bytes |
+| Healthcheck Docker | API, portal e dashboard `healthy` |
 | Usuário do processo | `uid=10001` |
 | `GET /health` | `status=ok`, modelo carregado |
 | `GET /model-info` | mesma versão do `/health` |
 | `POST /predict` como patient | `403 clinician_review_required` |
 | `POST /predict` como doctor | sucesso com modelo real |
 | `X-Request-ID` e `Server-Timing` | presentes |
+| Portal por papel | HTTP 200 em `localhost:8501` |
+| Dashboard técnico | HTTP 200 em `localhost:8502` |
 | Ruff | aprovado |
 | Pytest | 140 aprovados; 1 teste de symlink desconsiderado no Windows |
 
@@ -64,9 +70,9 @@ uv run ruff format --check .
 uv run ruff check .
 uv run pytest
 docker compose config --quiet
-docker compose build api-prod
-docker compose up -d api-prod
-docker compose ps api-prod
+docker compose build api-prod portal-prod dashboard-dev
+docker compose up -d --wait api-prod portal-prod dashboard-dev
+docker compose ps
 docker compose down
 ```
 

@@ -252,7 +252,7 @@ uv run ruff check .       # lint
 uv run ruff format --check .  # verificação de formatação
 ```
 
-## API oficial em Docker
+## Plataforma local em Docker
 
 A imagem na raiz executa `triage_ml.api.app:app` com um worker, usuário não-root e
 healthcheck nativo. O modelo não entra na imagem: `models/` é montado somente para leitura.
@@ -266,6 +266,10 @@ API_MODEL_PATH=/models/<versao>/model.joblib
 TRIAGE_ML_API_KEY_SERVICE=<chave-com-32-ou-mais-caracteres>
 TRIAGE_ML_API_KEY_DOCTOR=<chave-com-32-ou-mais-caracteres>
 TRIAGE_ML_API_KEY_PATIENT=<chave-com-32-ou-mais-caracteres>
+TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME=medico-demo
+TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD=<senha-local>
+TRIAGE_ML_DASHBOARD_PATIENT_USERNAME=paciente-demo
+TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD=<outra-senha-local>
 ```
 
 `API_MODEL_PATH` usa o caminho **interno** do contêiner. As chaves do exemplo devem ser
@@ -274,12 +278,16 @@ processo com prefixo `TRIAGE_ML_`; o Compose é responsável por selecionar o qu
 arquivo compartilhado `.env` e entra no serviço.
 
 ```bash
-docker compose up --build -d api-prod
-docker compose ps api-prod
+docker compose up --build -d --wait api-prod portal-prod dashboard-dev
+docker compose ps
 curl http://localhost:8000/health
-docker compose logs --tail=100 api-prod
 docker compose down
 ```
+
+Após o healthcheck, acesse a API em `http://localhost:8000`, o portal por papel em
+`http://localhost:8501` e o dashboard técnico em `http://localhost:8502`. Os três serviços
+usam a rede interna do Compose; somente os processos Streamlit recebem as chaves necessárias
+às suas funções, sempre no servidor e nunca incorporadas às imagens.
 
 O serviço falha rapidamente se faltar uma chave, se o modelo não existir ou se as versões
 de NumPy, SciPy e scikit-learn forem incompatíveis com o manifesto do artefato. Essas
@@ -287,8 +295,9 @@ dependências ficam fixadas no `pyproject.toml` e no `uv.lock` para treino e inf
 usarem o mesmo contrato de serialização.
 
 No GitHub Actions, o job `quality` verifica lockfile, formato, lint, testes e pacote. Após
-ele passar, o job `container` constrói o `Dockerfile` e importa a aplicação ASGI dentro da
-imagem. Modelos e segredos não são necessários nem incluídos nesse build.
+ele passar, o job `container` constrói os targets da API, portal e dashboard, importa a
+aplicação ASGI e audita usuário e metadados das imagens. Modelos e segredos não são
+necessários nem incluídos nesse build.
 
 ## Plano de implementação
 
