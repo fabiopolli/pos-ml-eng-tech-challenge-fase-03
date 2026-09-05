@@ -133,3 +133,12 @@ jobs:
           --env TRIAGE_ML_API_KEY_PATIENT=pat-000000000000000000000000000000
           triage-ml-api:ci -c
           "from triage_ml.api.app import app; assert app.title == 'Triage ML - Prod API'"
+
+      - name: Audit image runtime metadata
+        shell: bash
+        run: |
+          test "$(docker image inspect triage-ml-api:ci --format '{{.Config.User}}')" = "10001:10001"
+          ! docker image inspect triage-ml-api:ci --format '{{json .Config.Env}}' |
+            grep -E 'TRIAGE_ML_API_KEY_(SERVICE|DOCTOR|PATIENT)='
+          ! docker history --no-trunc --format '{{.CreatedBy}}' triage-ml-api:ci |
+            grep -E 'TRIAGE_ML_API_KEY_(SERVICE|DOCTOR|PATIENT)='
