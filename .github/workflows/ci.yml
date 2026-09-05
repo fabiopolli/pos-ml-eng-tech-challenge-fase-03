@@ -37,7 +37,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Test
-        run: uv run pytest
+        run: uv run pytest --ignore=tests/e2e
 
       - name: Build package
         run: uv build
@@ -47,3 +47,66 @@ jobs:
           uv run --isolated --no-project --with ./dist/*.whl python -c
           "from triage_ml.models.train import DEFAULT_CONFIG;
           assert DEFAULT_CONFIG.is_file(), DEFAULT_CONFIG"
+
+  front-e2e:
+    runs-on: ubuntu-latest
+    needs: quality
+    env:
+      TRIAGE_ML_PROD_API_URL: http://127.0.0.1:8765
+      TRIAGE_ML_API_KEY_DOCTOR: doc-e2e-key
+      TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME: medico-e2e
+      TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD: medico-senha
+      TRIAGE_ML_DASHBOARD_PATIENT_USERNAME: paciente-e2e
+      TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD: paciente-senha
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+          version: "0.11.23"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --dev --locked
+
+      - name: Install Chromium
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run portal browser tests
+        shell: bash
+        run: |
+          mkdir -p test-results
+          uv run uvicorn fake_api:app --app-dir tests/e2e --host 127.0.0.1 --port 8765 \
+            >test-results/fake-api.log 2>&1 &
+          uv run streamlit run front/app_prod.py --server.headless true \
+            --server.address 127.0.0.1 --server.port 8501 \
+            >test-results/streamlit.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8765/health >/dev/null \
+              && curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Services did not become ready" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          uv run pytest tests/e2e --browser chromium --output test-results/playwright \
+            --screenshot only-on-failure --tracing retain-on-failure
+
+      - name: Upload browser-test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: front-e2e-evidence
+          path: test-results/
+          if-no-files-found: error
+          retention-days: 14
