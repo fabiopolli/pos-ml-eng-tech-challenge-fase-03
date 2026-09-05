@@ -177,10 +177,18 @@ Aceite oficial (junto com Etapa 5 fecha 20%): stack completa no Compose e dashbo
 - [x] Implementar treino e avaliação.
 - [x] Persistir artefato e metadados no caminho configurável do contrato.
 - [x] Garantir configuração portátil e tarefas idempotentes quando possível.
-- [ ] Testar/importar a DAG sem erros e registrar evidência de execução.
+- [x] Testar/importar a DAG sem erros e registrar evidência de execução.
 - [x] Suportar retreino disparando a partir da Etapa 8 (cloud) ou manualmente.
 
 Aceite oficial (15%): DAG funcional realizando ingestão e treino, com modelo salvo no caminho versionado.
+
+**Evidência 2026-09-05:** `airflow dags test triage_ml_retraining 2026-09-05`
+executado com sucesso via Docker contra a `main` do DagsHub no commit
+`069dc330e8f5c478a82c893cc224d63734781f6f`. A ingestão leu 11.550 registros,
+validou 7.489 elegíveis e preparou 5.000; o artefato
+`20260905T171611Z-f2cb6f23f9cd` foi persistido e validado com `accuracy=0.7520`,
+`balanced_accuracy=0.7281` e `macro_f1=0.7335`. Uma segunda execução terminou com
+sucesso e `reused=true`, confirmando a idempotência para os mesmos dataset e configuração.
 
 ## Etapa 8 — Cloud, vídeo e documentação final
 

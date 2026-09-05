@@ -24,6 +24,7 @@ data/processed/*
 !data/processed/README.md
 models/*
 !models/README.md
+/reports/figures/*/
 artifacts/
 *.joblib
 *.pkl
