@@ -217,6 +217,10 @@ def _render_doctor_dashboard(config: DashboardConfig) -> None:
     st.markdown('<div class="role-card doctor-card">', unsafe_allow_html=True)
     st.subheader("Área médica")
     st.write("Envie um texto clínico em inglês para apoiar a triagem. A decisão final é humana.")
+    st.warning(
+        "Uso profissional: a classe produzida pelo modelo não constitui diagnóstico e não deve "
+        "ser comunicada ao paciente sem avaliação clínica."
+    )
     st.markdown("</div>", unsafe_allow_html=True)
     _render_health(config)
 
@@ -270,24 +274,59 @@ def _format_score(value: object) -> str:
 def _render_patient_dashboard(config: DashboardConfig) -> None:
     st.markdown('<div class="role-card patient-card">', unsafe_allow_html=True)
     st.subheader("Área do paciente")
-    st.write(
-        "Para sua segurança, classificações automáticas não são exibidas diretamente. "
-        "Um profissional de saúde revisará qualquer informação clínica antes de orientá-lo."
-    )
+    st.write("Acompanhe as etapas de uma avaliação com revisão obrigatória de um profissional.")
     st.markdown("</div>", unsafe_allow_html=True)
-    _render_health(config)
-    st.info(
-        "Proteção RBAC ativa: esta sessão não possui chave médica e não chama o endpoint "
-        "de predição. Labels, scores e resultados clínicos permanecem indisponíveis."
+
+    st.warning(
+        "Este portal não fornece diagnóstico. Resultados automáticos, nomes de doenças e "
+        "pontuações são restritos à equipe médica para evitar interpretações inseguras."
+    )
+
+    step_understand, step_review, step_guidance = st.tabs(
+        ["1. Entenda o processo", "2. Revisão médica", "3. Próximos passos"]
+    )
+    with step_understand:
+        st.subheader("Sua segurança vem primeiro")
+        st.write(
+            "O modelo é uma ferramenta de apoio e pode errar. Por isso, qualquer classificação "
+            "precisa ser analisada em conjunto com sintomas, histórico e exames."
+        )
+        st.info("Nenhuma classificação automática é exibida nesta área.")
+
+    with step_review:
+        st.subheader("Status: aguardando avaliação profissional")
+        st.write(
+            "Um profissional habilitado deve revisar as informações antes de conversar com você "
+            "sobre hipóteses, diagnóstico ou tratamento."
+        )
+        st.progress(2 / 3, text="Etapa de revisão médica")
+
+    with step_guidance:
+        st.subheader("Como buscar atendimento")
+        st.write(
+            "Converse com sua equipe de saúde para receber orientação individualizada. "
+            "Não tome decisões médicas com base apenas em sistemas automatizados."
+        )
+        st.error(
+            "Em caso de sintomas graves, piora rápida ou risco imediato, procure um serviço de "
+            "emergência."
+        )
+
+    with st.expander("Estado técnico do serviço"):
+        _render_health(config)
+    st.caption(
+        "Proteção de acesso ativa: a sessão do paciente não possui chave médica e não chama "
+        "o endpoint de predição."
     )
 
 
 def _render_login(config: DashboardConfig) -> None:
-    st.subheader("Acesso ao portal")
-    st.caption("Use as credenciais configuradas no ambiente do dashboard.")
+    st.subheader("Entrar no Portal Clínico")
+    st.write("Use seu usuário e senha. O perfil de acesso é definido pelas credenciais.")
+    st.caption("Ambiente demonstrativo: não use credenciais pessoais ou dados clínicos reais.")
     with st.form("login"):
-        username = st.text_input("Usuário")
-        password = st.text_input("Senha", type="password")
+        username = st.text_input("Usuário", autocomplete="username")
+        password = st.text_input("Senha", type="password", autocomplete="current-password")
         submitted = st.form_submit_button("Entrar", type="primary")
 
     if submitted:
