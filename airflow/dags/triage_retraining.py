@@ -32,9 +32,7 @@ def triage_ml_retraining():
             repository_url=os.environ["DATA_REPOSITORY_URL"],
             branch=os.getenv("DATA_REPOSITORY_BRANCH", "main"),
             dataset_relative_path=os.getenv("DATASET_RELATIVE_PATH", "data/medical_tc_train.csv"),
-            destination=os.getenv(
-                "TRIAGE_RAW_CSV", "/opt/airflow/project/data/medical_tc_train.csv"
-            ),
+            destination=os.getenv("TRIAGE_RAW_CSV", "/opt/triage-ml/data/medical_tc_train.csv"),
         )
 
     @task(execution_timeout=timedelta(minutes=10))
@@ -48,11 +46,11 @@ def triage_ml_retraining():
     def train(validated: dict) -> dict:
         return train_evaluate_persist(
             dataset_path=validated["dataset_path"],
-            models_dir=os.getenv("TRIAGE_MODELS_DIR", "/opt/airflow/project/models"),
-            figures_dir=os.getenv("TRIAGE_REPORTS_DIR", "/opt/airflow/project/reports/figures"),
+            models_dir=os.getenv("TRIAGE_MODELS_DIR", "/opt/triage-ml/models"),
+            figures_dir=os.getenv("TRIAGE_REPORTS_DIR", "/opt/triage-ml/reports/figures"),
             config_path=os.getenv(
                 "TRIAGE_TRAINING_CONFIG",
-                "/opt/airflow/project/configs/training.yaml",
+                "/opt/triage-ml/configs/training.yaml",
             ),
             source_commit=validated["source_commit"],
         )

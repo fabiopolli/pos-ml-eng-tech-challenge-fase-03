@@ -36,8 +36,16 @@ O dataset fica em `data/medical_tc_train.csv` e os resultados em `models/<versã
 ## Configuração
 
 As variáveis documentadas em `.env.example` selecionam URL, branch e caminho do CSV no
-repositório de dados. Para um repositório privado, não inclua credenciais na URL: injete o
-segredo no ambiente do container por um mecanismo de secrets.
+repositório de dados. A implementação atual usa clone HTTPS não interativo e, portanto, o
+repositório precisa permitir leitura anônima. Confirme isso fora de uma sessão autenticada:
+
+```bash
+git ls-remote --heads \
+  https://dagshub.com/deniscelclaro/pos-ml-eng-tech-challenge-fase-03.git main
+```
+
+Repositórios privados exigem uma integração explícita com secrets antes da execução. Nunca
+inclua usuário, senha ou token na URL, nos arquivos versionados ou nos logs do Airflow.
 
 ## Diagnóstico
 

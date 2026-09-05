@@ -5,6 +5,10 @@
 __pycache__
 .pytest_cache
 .ruff_cache
+**/*.egg-info
+**/*.egg-info/**
+build
+dist
 airflow/logs
 data
 models

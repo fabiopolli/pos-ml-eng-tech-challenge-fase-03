@@ -10,19 +10,19 @@ services:
       DATA_REPOSITORY_URL: ${DATA_REPOSITORY_URL:-https://dagshub.com/deniscelclaro/pos-ml-eng-tech-challenge-fase-03.git}
       DATA_REPOSITORY_BRANCH: ${DATA_REPOSITORY_BRANCH:-main}
       DATASET_RELATIVE_PATH: ${DATASET_RELATIVE_PATH:-data/medical_tc_train.csv}
-      TRIAGE_RAW_CSV: /opt/airflow/project/data/medical_tc_train.csv
-      TRIAGE_MODELS_DIR: /opt/airflow/project/models
-      TRIAGE_REPORTS_DIR: /opt/airflow/project/reports/figures
-      TRIAGE_TRAINING_CONFIG: /opt/airflow/project/configs/training.yaml
+      TRIAGE_RAW_CSV: /opt/triage-ml/data/medical_tc_train.csv
+      TRIAGE_MODELS_DIR: /opt/triage-ml/models
+      TRIAGE_REPORTS_DIR: /opt/triage-ml/reports/figures
+      TRIAGE_TRAINING_CONFIG: /opt/triage-ml/configs/training.yaml
     ports:
       - "${AIRFLOW_PORT:-8080}:8080"
     volumes:
       - ./airflow/dags:/opt/airflow/dags:ro
       - ./airflow/logs:/opt/airflow/logs
-      - ./configs:/opt/airflow/project/configs:ro
-      - ./data:/opt/airflow/project/data
-      - ./models:/opt/airflow/project/models
-      - ./reports:/opt/airflow/project/reports
+      - ./configs:/opt/triage-ml/configs:ro
+      - ./data:/opt/triage-ml/data
+      - ./models:/opt/triage-ml/models
+      - ./reports:/opt/triage-ml/reports
       - airflow-state:/opt/airflow
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
