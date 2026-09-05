@@ -110,3 +110,26 @@ jobs:
           path: test-results/
           if-no-files-found: error
           retention-days: 14
+
+  container:
+    needs: quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build production API image
+        run: docker build --tag triage-ml-api:ci .
+
+      - name: Smoke-test ASGI application
+        run: >-
+          docker run --rm
+          --entrypoint python
+          --env MODEL_PATH=/models/not-mounted/model.joblib
+          --env TRIAGE_ML_API_KEY_SERVICE=srv-000000000000000000000000000000
+          --env TRIAGE_ML_API_KEY_DOCTOR=doc-000000000000000000000000000000
+          --env TRIAGE_ML_API_KEY_PATIENT=pat-000000000000000000000000000000
+          triage-ml-api:ci -c
+          "from triage_ml.api.app import app; assert app.title == 'Triage ML - Prod API'"
