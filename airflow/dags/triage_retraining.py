@@ -33,6 +33,8 @@ def triage_ml_retraining():
             branch=os.getenv("DATA_REPOSITORY_BRANCH", "main"),
             dataset_relative_path=os.getenv("DATASET_RELATIVE_PATH", "data/medical_tc_train.csv"),
             destination=os.getenv("TRIAGE_RAW_CSV", "/opt/triage-ml/data/medical_tc_train.csv"),
+            git_username=os.getenv("DAGSHUB_USERNAME") or None,
+            git_token=os.getenv("DAGSHUB_USER_TOKEN") or None,
         )
 
     @task(execution_timeout=timedelta(minutes=10))

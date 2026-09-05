@@ -50,6 +50,49 @@ def test_ingestion_rejects_unsafe_dataset_paths(relative: str, tmp_path: Path) -
         )
 
 
+def test_ingestion_requires_complete_git_credentials(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="provided together"):
+        airflow_pipeline.ingest_from_git(
+            repository_url="https://example.invalid/repository.git",
+            branch="main",
+            dataset_relative_path="data/dataset.csv",
+            destination=tmp_path / "dataset.csv",
+            git_username="user",
+        )
+
+
+def test_ingestion_keeps_git_token_out_of_command(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "source.csv"
+    source.write_text("condition_label,medical_abstract\n", encoding="utf-8")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[1] == "clone":
+            checkout = Path(command[-1])
+            (checkout / "data").mkdir(parents=True)
+            (checkout / "data" / "dataset.csv").write_bytes(source.read_bytes())
+            return type("Result", (), {"stdout": ""})()
+        return type("Result", (), {"stdout": "a" * 40 + "\n"})()
+
+    monkeypatch.setattr(airflow_pipeline.subprocess, "run", fake_run)
+
+    airflow_pipeline.ingest_from_git(
+        repository_url="https://dagshub.com/example/project.git",
+        branch="main",
+        dataset_relative_path="data/dataset.csv",
+        destination=tmp_path / "published.csv",
+        git_username="example-user",
+        git_token="secret-token",
+    )
+
+    clone_command, clone_kwargs = calls[0]
+    assert "secret-token" not in " ".join(clone_command)
+    assert clone_kwargs["env"]["DAGSHUB_USER_TOKEN"] == "secret-token"
+    assert clone_kwargs["env"]["GIT_TERMINAL_PROMPT"] == "0"
+    assert Path(clone_kwargs["env"]["GIT_ASKPASS"]).name == "git-askpass.sh"
+
+
 def test_training_reuses_valid_identical_inputs(tmp_path: Path, monkeypatch) -> None:
     dataset = tmp_path / "dataset.csv"
     config = tmp_path / "training.yaml"

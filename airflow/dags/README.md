@@ -36,16 +36,17 @@ O dataset fica em `data/medical_tc_train.csv` e os resultados em `models/<versã
 ## Configuração
 
 As variáveis documentadas em `.env.example` selecionam URL, branch e caminho do CSV no
-repositório de dados. A implementação atual usa clone HTTPS não interativo e, portanto, o
-repositório precisa permitir leitura anônima. Confirme isso fora de uma sessão autenticada:
+repositório de dados. O endpoint Git do DagsHub solicita autenticação mesmo quando a página
+do projeto é pública. Crie um token de leitura nas configurações do DagsHub e preencha apenas
+o arquivo local `.env` (ignorado pelo Git):
 
-```bash
-git ls-remote --heads \
-  https://dagshub.com/deniscelclaro/pos-ml-eng-tech-challenge-fase-03.git main
+```dotenv
+DAGSHUB_USERNAME=seu-usuario
+DAGSHUB_USER_TOKEN=seu-token-de-leitura
 ```
 
-Repositórios privados exigem uma integração explícita com secrets antes da execução. Nunca
-inclua usuário, senha ou token na URL, nos arquivos versionados ou nos logs do Airflow.
+O clone recebe as credenciais por um `GIT_ASKPASS` temporário, removido ao final da tarefa.
+Nunca inclua usuário, senha ou token na URL, nos arquivos versionados ou nos logs do Airflow.
 
 ## Diagnóstico
 

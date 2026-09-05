@@ -41,6 +41,8 @@ def ingest_from_git(
     branch: str,
     dataset_relative_path: str,
     destination: str | Path,
+    git_username: str | None = None,
+    git_token: str | None = None,
 ) -> dict[str, Any]:
     """Clone a data source in isolation and atomically publish only its dataset."""
 
@@ -48,12 +50,34 @@ def ingest_from_git(
         raise ValueError("repository_url must use HTTPS")
     if not branch or branch.startswith("-"):
         raise ValueError("branch must be a non-empty Git branch name")
+    if bool(git_username) != bool(git_token):
+        raise ValueError("git_username and git_token must be provided together")
     relative = _safe_relative_path(dataset_relative_path)
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="triage-airflow-ingest-") as temp_dir:
         checkout = Path(temp_dir) / "source"
+        clone_environment = os.environ.copy()
+        clone_environment["GIT_TERMINAL_PROMPT"] = "0"
+        if git_username and git_token:
+            askpass = Path(temp_dir) / "git-askpass.sh"
+            askpass.write_text(
+                "#!/bin/sh\n"
+                'case "$1" in\n'
+                "  *Username*) printf '%s\\n' \"$DAGSHUB_USERNAME\" ;;\n"
+                "  *Password*) printf '%s\\n' \"$DAGSHUB_USER_TOKEN\" ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            askpass.chmod(0o700)
+            clone_environment.update(
+                {
+                    "GIT_ASKPASS": str(askpass),
+                    "DAGSHUB_USERNAME": git_username,
+                    "DAGSHUB_USER_TOKEN": git_token,
+                }
+            )
         subprocess.run(
             [
                 "git",
@@ -71,6 +95,7 @@ def ingest_from_git(
             capture_output=True,
             text=True,
             timeout=300,
+            env=clone_environment,
         )
         source = checkout.joinpath(*relative.parts)
         if not source.is_file():
