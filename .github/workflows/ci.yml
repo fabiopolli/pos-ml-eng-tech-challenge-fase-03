@@ -123,6 +123,11 @@ jobs:
       - name: Build production API image
         run: docker build --tag triage-ml-api:ci .
 
+      - name: Build Streamlit images
+        run: |
+          docker build --target portal-runtime --tag triage-ml-portal:ci .
+          docker build --target dev-dashboard-runtime --tag triage-ml-dashboard-dev:ci .
+
       - name: Smoke-test ASGI application
         run: >-
           docker run --rm
@@ -142,3 +147,9 @@ jobs:
             grep -E 'TRIAGE_ML_API_KEY_(SERVICE|DOCTOR|PATIENT)='
           ! docker history --no-trunc --format '{{.CreatedBy}}' triage-ml-api:ci |
             grep -E 'TRIAGE_ML_API_KEY_(SERVICE|DOCTOR|PATIENT)='
+          test "$(docker image inspect triage-ml-portal:ci --format '{{.Config.User}}')" = "10001:10001"
+          test "$(docker image inspect triage-ml-dashboard-dev:ci --format '{{.Config.User}}')" = "10001:10001"
+          ! docker image inspect triage-ml-portal:ci --format '{{json .Config.Env}}' |
+            grep -E 'TRIAGE_ML_(API_KEY|DASHBOARD_.+PASSWORD)='
+          ! docker image inspect triage-ml-dashboard-dev:ci --format '{{json .Config.Env}}' |
+            grep -E 'TRIAGE_ML_(DEV_API_KEY|DASHBOARD_.+PASSWORD)='
