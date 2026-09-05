@@ -28,3 +28,56 @@ services:
       - no-new-privileges:true
     init: true
     restart: unless-stopped
+
+  portal-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: portal-runtime
+    image: triage-ml-portal:local
+    environment:
+      TRIAGE_ML_PROD_API_URL: http://api-prod:8000
+      TRIAGE_ML_API_KEY_DOCTOR: ${TRIAGE_ML_API_KEY_DOCTOR:?Set TRIAGE_ML_API_KEY_DOCTOR}
+      TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME: ${TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME:?Set doctor username}
+      TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD: ${TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD:?Set doctor password}
+      TRIAGE_ML_DASHBOARD_PATIENT_USERNAME: ${TRIAGE_ML_DASHBOARD_PATIENT_USERNAME:?Set patient username}
+      TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD: ${TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD:?Set patient password}
+    ports:
+      - "${PORTAL_PORT:-8501}:8501"
+    depends_on:
+      api-prod:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+
+  dashboard-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev-dashboard-runtime
+    image: triage-ml-dashboard-dev:local
+    environment:
+      TRIAGE_ML_DEV_API_URL: http://api-prod:8000
+      TRIAGE_ML_DEV_API_KEY_DOCTOR: ${TRIAGE_ML_API_KEY_DOCTOR:?Set TRIAGE_ML_API_KEY_DOCTOR}
+      TRIAGE_ML_DEV_API_KEY_SERVICE: ${TRIAGE_ML_API_KEY_SERVICE:?Set TRIAGE_ML_API_KEY_SERVICE}
+    ports:
+      - "${DEV_DASHBOARD_PORT:-8502}:8501"
+    depends_on:
+      api-prod:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
