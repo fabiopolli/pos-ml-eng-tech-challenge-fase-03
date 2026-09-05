@@ -105,7 +105,8 @@ Os comandos da API, Airflow e stack de observabilidade serão acrescentados quan
 - [x] Treinar classificador de texto (baseline TF-IDF + classificador linear) — Bill
 - [~] Construir API FastAPI — Romário (Bill disponibilizou uma API de desenvolvimento em `src/triage_ml/dev_api/` para acelerar validações locais; não é a entrega oficial)
 - [~] Configurar CI/CD, Docker e testes — Fábio (CI inicial criado; Docker pendente)
-- [ ] Implementar DAG Airflow funcional — Denis
+- [~] Implementar DAG Airflow funcional — Denis (DAG, ingestão DagsHub, testes e Compose
+  implementados; execução completa em Docker pendente)
 - [ ] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill
 - [ ] Documentar arquitetura em nuvem — Romário
 - [~] Manter documentação detalhada — Fábio (documento vivo)
