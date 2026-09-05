@@ -3,7 +3,7 @@
 - **Integrante**: Romário
 - **Origem**: Tech Challenge — Fase 3 (ML Engineering)
 - **Etapa do checklist**: Etapa 3 (`docs/CHECKLIST.md` linha 104) — *API oficial servindo o modelo*
-- **Status**: implementação da API oficial concluída e validada localmente; Docker/Compose continuam pendentes sob responsabilidade de Fábio.
+- **Status**: implementação da API oficial e Docker/Compose concluídos e validados localmente; build remoto aguarda o próximo PR.
 - **Mapeamento**: este plano cobre a Etapa 3 do checklist e prepara o gancho para Etapa 5 (otimização), Etapa 6 (Prometheus/Grafana) e Etapa 8 (cloud + vídeo).
 
 > **Antes de começar**: a [`dev_api`](../../src/triage_ml/dev_api/) já é um FastAPI real (não stub) que consome o artefato validado em `models/<versão>/model.joblib`. Este plano **não duplica** o que está bom — ele eleva o mesmo núcleo para o nível produção (autenticação, rate-limit, observabilidade, deploy containerizado, contrato estável). Toda a base de contrato (`PredictIn`, `PredictOut`, `HealthOut`, `ModelInfoOut`, `ModelsListOut`, `ReloadIn`, `ReloadOut`, `ErrorOut`) está em [`src/triage_ml/dev_api/schemas.py`](../../src/triage_ml/dev_api/schemas.py) e pode ser **reaproveitada** como ponto de partida.
@@ -222,7 +222,7 @@ class Settings(BaseSettings):
 | `tests/test_api_health.py` | `/health`, `/model-info`, `/models` (happy path + 503) |
 | `tests/test_api_predict.py` | `/predict` happy path + cada `error_code` (validation, language, prediction_failed) |
 | `tests/test_api_reload.py` | `/reload` happy + 404 + 500; holder preservado em falha |
-| `tests/test_api_docker.py` | Builda a imagem no CI, sobe `docker run`, bate em `/health` |
+| `tests/test_api_container.py` | Valida guardrails do Dockerfile e do Compose; CI builda e importa a aplicação ASGI |
 
 ### T6. Dockerfile + `docker-compose.yml`
 
@@ -247,7 +247,7 @@ class Settings(BaseSettings):
 - [x] **`latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing`** preservados em todas as rotas.
 - [x] **Testes unitários e de integração** verdes (novo alvo: ≥ 120 testes totais somando `dev_api` + `api`).
 - [x] **Baseline de latência local** documentado em `reports/benchmarks/api-prod-baseline.json`.
-- [ ] **Dockerfile multi-stage** + `docker-compose.yml` funcional (parte do entregável do Fábio; fora desta branch).
+- [x] **Dockerfile multi-stage** + `docker-compose.yml` funcional (entrega de Fábio validada localmente em 2026-09-05).
 
 ---
 
@@ -297,7 +297,7 @@ uv run ruff check . && uv run ruff format --check .
 - Itens da Etapa 3 marcados como `[x]` no checklist com evidência.
 - Schemas em `src/triage_ml/api/schemas.py` (fonte canônica) e `dev_api` reexportando.
 - `uv run pytest` e `ruff check .` verdes (≥ 120 testes totais).
-- Entrega de Docker/Compose e smoke test de imagem pendente sob responsabilidade de Fábio.
+- Docker/Compose e smoke test de imagem entregues por Fábio; resultado remoto aguarda o PR da Etapa 4.
 - `reports/benchmarks/api-prod-baseline.json` versionado e referenciado na Etapa 5.
 - `docs/reports/Etapa_3_API_oficial.md` descrevendo o que foi entregue.
 
