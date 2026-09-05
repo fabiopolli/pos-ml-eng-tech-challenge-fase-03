@@ -95,7 +95,9 @@ no vídeo STAR. Tem uma tela de login e duas experiências distintas:
 - **Médico**: o processo Streamlit chama `POST /predict` com a chave de médico
   configurada no ambiente e apresenta a resposta da API para apoio à triagem.
 - **Paciente**: não recebe chave médica e **nunca chama** `/predict`; vê somente
-  o estado público da API e a mensagem de que a revisão clínica é necessária.
+  uma jornada educativa em três etapas (processo, revisão médica e próximos
+  passos). Não recebe diagnóstico, nome de doença, classe ou score; o estado
+  técnico da API fica recolhido em uma seção secundária.
 
 O login é deliberadamente uma demonstração local baseada em credenciais de
 ambiente. Ele não substitui um provedor de identidade (OIDC/Identity Platform)
@@ -131,3 +133,25 @@ uv run streamlit run front/app_prod.py
 Abra `http://localhost:8501`. Para o vídeo, entre uma vez como paciente para
 mostrar o bloqueio clínico e outra como médico para executar uma predição com
 texto sintético em inglês. Não use laudos reais na demonstração.
+
+### Testes de navegador
+
+Os testes Playwright em `tests/e2e/test_prod_portal.py` iniciam o portal contra
+uma API determinística exclusiva de teste e validam pelo Chromium:
+
+- rejeição de credenciais inválidas;
+- login, navegação pelas três etapas e logout do paciente;
+- ausência do botão de predição e **zero chamadas** a `POST /predict` durante a
+  sessão do paciente;
+- login médico, aviso de uso profissional e predição autenticada server-side.
+
+O job `front-e2e` do GitHub Actions instala o Chromium, sobe os dois processos e
+publica logs, screenshots e traces de falha no artefato `front-e2e-evidence` por
+14 dias. Para reproduzir localmente, instale o navegador com
+`uv run playwright install chromium`, suba a API de teste e o Streamlit com as
+variáveis demonstrativas descritas acima e execute:
+
+```powershell
+uv run pytest tests/e2e --browser chromium --output test-results/playwright `
+  --screenshot only-on-failure --tracing retain-on-failure
+```
