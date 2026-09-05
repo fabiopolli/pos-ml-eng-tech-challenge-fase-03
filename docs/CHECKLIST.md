@@ -2,7 +2,7 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-09-05 — API e dois fronts validados em uma stack Docker local.
+Última atualização: 2026-09-05 — Etapa 4 concluída com CI remoto verde no PR #5.
 
 ## Visão geral e responsáveis
 
@@ -10,7 +10,7 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 - [x] EDA e escolha do dataset — Denis
 - [x] Classificador de texto (baseline) — Bill
 - [x] API FastAPI — Romário
-- [~] CI/CD, Docker e testes — Fábio
+- [x] CI/CD, Docker e testes — Fábio
 - [x] DAG Airflow — Denis
 - [ ] Otimização de latência e observabilidade — Bill
 - [ ] Arquitetura em nuvem — Romário
@@ -137,7 +137,7 @@ Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta 
 - [x] Empacotar portal por papel e dashboard técnico em targets Docker reproduzíveis.
 - [x] Adicionar build da imagem ao CI.
 - [x] Documentar execução local e no CI.
-- [ ] Confirmar primeiro workflow verde no GitHub.
+- [x] Confirmar primeiro workflow verde no GitHub.
 
 Aceite oficial (15%): GitHub Actions executando ao menos lint e testes básicos, build da imagem verde.
 
@@ -146,20 +146,22 @@ Chromium: credenciais inválidas permanecem no login; paciente percorre revisão
 orientação, encerra a sessão e produz zero chamadas a `/predict`; médico autentica,
 visualiza o aviso de apoio não diagnóstico e executa uma predição server-side. O job
 `front-e2e` repete os cenários no GitHub Actions e retém logs, screenshots e traces de
-falha no artefato `front-e2e-evidence` por 14 dias. A confirmação remota permanece
-pendente até a execução do workflow no PR.
+falha no artefato `front-e2e-evidence` por 14 dias.
 
 **Evidência local 2026-09-05:** build multi-stage concluído; imagem de aproximadamente
 289 MB; Compose saudável com modelo real montado em modo somente leitura; Ruff aprovado e
 140 testes aprovados (1 teste de symlink desconsiderado por privilégio do Windows). Detalhes
-e comandos em `docs/reports/Etapa_4_CI_CD_Docker.md`. O aceite remoto permanece pendente até
-o novo job `container` concluir verde no GitHub Actions.
+e comandos em `docs/reports/Etapa_4_CI_CD_Docker.md`.
 
 **Evidência da stack 2026-09-05:** `api-prod`, `portal-prod` e `dashboard-dev`
 construídos e iniciados pelo Compose com healthchecks saudáveis, UID `10001:10001` e
 filesystem somente leitura. A API carregou o artefato real do Airflow; portal e dashboard
 responderam HTTP 200 nas portas 8501 e 8502. O smoke test médico retornou a classe
 cardiovascular usando a chave fornecida somente em runtime.
+
+**Evidência remota 2026-09-05:** PR #5 integrado à `main`; workflow `CI` nº 39
+concluído com `success`, incluindo os jobs de qualidade, Playwright e build/auditoria das
+três imagens Docker.
 
 ## Etapa 5 — Otimização do modelo (Bill)
 

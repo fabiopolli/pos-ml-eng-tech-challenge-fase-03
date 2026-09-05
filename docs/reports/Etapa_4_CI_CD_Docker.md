@@ -76,5 +76,10 @@ docker compose ps
 docker compose down
 ```
 
-O resultado remoto do novo job `container` deve ser registrado no checklist somente depois
-que o workflow do pull request terminar verde.
+## Validação remota
+
+O PR #5 foi integrado à `main` após o workflow `CI` nº 39 concluir com `success`.
+O run executou qualidade, testes Playwright e build/auditoria das imagens de API,
+portal e dashboard:
+
+`https://github.com/fabiopolli/pos-ml-eng-tech-challenge-fase-03/actions/runs/33995734506`
