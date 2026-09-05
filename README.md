@@ -2,9 +2,9 @@
 
 Sistema de triagem automática de textos médicos, construído como um classificador NLP leve e servido por uma API REST. O projeto reúne treinamento e otimização do modelo, CI/CD, retreino orquestrado, observabilidade e uma proposta de implantação em nuvem.
 
-> Status: fundação, modelo baseline, API oficial e Airflow funcionais. A API possui imagem
-> Docker validada localmente; otimização, observabilidade e arquitetura em nuvem continuam
-> em desenvolvimento.
+> Status: fundação, modelo baseline, API oficial, Airflow e Etapa 4 de CI/CD concluídos.
+> API, portal por papel e dashboard técnico foram validados em Docker local e no GitHub
+> Actions. Otimização, observabilidade e arquitetura em nuvem continuam em desenvolvimento.
 
 ## Equipe e responsabilidades
 
@@ -98,7 +98,7 @@ uv run ruff check .
 uv run pytest
 ```
 
-Para executar a API oficial em Docker, consulte a seção [API oficial em Docker](#api-oficial-em-docker).
+Para executar a plataforma, consulte [Plataforma local em Docker](#plataforma-local-em-docker).
 O Airflow possui instruções próprias em [`airflow/dags/README.md`](airflow/dags/README.md).
 Prometheus e Grafana permanecem planejados e serão adicionados sem alterar o contrato da API.
 
@@ -108,8 +108,8 @@ Prometheus e Grafana permanecem planejados e serão adicionados sem alterar o co
 - [x] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
 - [x] Treinar classificador de texto (baseline TF-IDF + classificador linear) — Bill
 - [x] Construir API FastAPI — Romário; imagem Docker da API oficial validada por Fábio
-- [~] Configurar CI/CD, Docker e testes — Fábio (imagem local validada; build remoto da
-  imagem aguarda o próximo PR)
+- [x] Configurar CI/CD, Docker e testes — Fábio (API e dois fronts validados localmente;
+  workflow remoto verde no PR #5)
 - [x] Implementar DAG Airflow funcional — Denis (execução completa e idempotência
   validadas em Docker contra o DagsHub)
 - [ ] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill
@@ -254,6 +254,18 @@ uv run ruff format --check .  # verificação de formatação
 
 ## Plataforma local em Docker
 
+Pré-requisitos: Docker Desktop em execução, um artefato válido sob `models/<versao>/`
+e um arquivo `.env` local. A stack principal possui:
+
+| Serviço | Porta padrão | Finalidade |
+|---|---:|---|
+| `api-prod` | 8000 | API FastAPI e inferência com o modelo real |
+| `portal-prod` | 8501 | front do Romário, com login médico/paciente |
+| `dashboard-dev` | 8502 | front técnico do Bill, com health, modelo e testes manuais |
+
+O Airflow permanece isolado em `docker-compose.airflow.yml`, na porta 8080, para que
+retreino e inferência possam ser iniciados ou encerrados independentemente.
+
 A imagem na raiz executa `triage_ml.api.app:app` com um worker, usuário não-root e
 healthcheck nativo. O modelo não entra na imagem: `models/` é montado somente para leitura.
 O Compose também remove capabilities Linux, bloqueia ganho de privilégios e deixa o
@@ -281,6 +293,7 @@ arquivo compartilhado `.env` e entra no serviço.
 docker compose up --build -d --wait api-prod portal-prod dashboard-dev
 docker compose ps
 curl http://localhost:8000/health
+docker compose logs --tail=100 api-prod portal-prod dashboard-dev
 docker compose down
 ```
 
@@ -295,9 +308,14 @@ dependências ficam fixadas no `pyproject.toml` e no `uv.lock` para treino e inf
 usarem o mesmo contrato de serialização.
 
 No GitHub Actions, o job `quality` verifica lockfile, formato, lint, testes e pacote. Após
-ele passar, o job `container` constrói os targets da API, portal e dashboard, importa a
-aplicação ASGI e audita usuário e metadados das imagens. Modelos e segredos não são
-necessários nem incluídos nesse build.
+ele passar, `front-e2e` valida o portal no Chromium e `container` constrói os targets da
+API, portal e dashboard, importa a aplicação ASGI e audita usuário e metadados das imagens.
+Modelos e segredos não são necessários nem incluídos nesse build. A execução remota nº 39
+foi concluída com sucesso no [PR #5](https://github.com/fabiopolli/pos-ml-eng-tech-challenge-fase-03/pull/5).
+
+Para os casos de uso do médico, paciente e dashboard técnico, consulte o
+[`Guia de uso dos fronts`](docs/guides/GUIA-USO-FRONTS.md). A validação detalhada das
+imagens está em [`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
 
 ## Plano de implementação
 
