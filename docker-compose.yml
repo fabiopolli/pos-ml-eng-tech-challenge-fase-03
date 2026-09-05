@@ -1,0 +1,30 @@
+name: triage-ml
+
+services:
+  api-prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: triage-ml-api:local
+    environment:
+      MODEL_PATH: ${API_MODEL_PATH:?Set API_MODEL_PATH to /models/<version>/model.joblib}
+      TRIAGE_ML_API_CONFIG: /app/configs/api.yaml
+      TRIAGE_ML_API_KEY_SERVICE: ${TRIAGE_ML_API_KEY_SERVICE:?Set TRIAGE_ML_API_KEY_SERVICE}
+      TRIAGE_ML_API_KEY_DOCTOR: ${TRIAGE_ML_API_KEY_DOCTOR:?Set TRIAGE_ML_API_KEY_DOCTOR}
+      TRIAGE_ML_API_KEY_PATIENT: ${TRIAGE_ML_API_KEY_PATIENT:?Set TRIAGE_ML_API_KEY_PATIENT}
+      TRIAGE_ML_LOG_LEVEL: ${TRIAGE_ML_LOG_LEVEL:-INFO}
+      TRIAGE_ML_RATELIMIT_DEFAULT: ${TRIAGE_ML_RATELIMIT_DEFAULT:-60/minute}
+      TRIAGE_ML_RATELIMIT_PREDICT: ${TRIAGE_ML_RATELIMIT_PREDICT:-30/minute}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./models:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped

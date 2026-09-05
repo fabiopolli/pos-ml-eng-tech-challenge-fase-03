@@ -14,6 +14,8 @@ def test_required_files_exist() -> None:
         ".agents/workflow.md",
         ".agents/operating-model.md",
         ".github/workflows/ci.yml",
+        "Dockerfile",
+        "docker-compose.yml",
     }
 
     missing = sorted(path for path in required if not (ROOT / path).is_file())
