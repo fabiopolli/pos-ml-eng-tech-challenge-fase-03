@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from fastapi import Request
@@ -107,6 +108,18 @@ def test_settings_accepts_explicit_valid_values() -> None:
     settings = make_settings(ratelimit_predict="2/minute")
 
     assert settings.ratelimit_predict == "2/minute"
+
+
+def test_settings_does_not_read_unrelated_dotenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sentinel = "must-not-enter-settings-validation"
+    (tmp_path / ".env").write_text(f"DAGSHUB_USER_TOKEN={sentinel}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    settings = make_settings()
+
+    assert sentinel not in repr(settings)
 
 
 @pytest.mark.parametrize(

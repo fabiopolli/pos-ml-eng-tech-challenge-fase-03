@@ -41,15 +41,17 @@ triage_ml = ["training.yaml"]
 
 [dependency-groups]
 dev = [
+    "pytest-playwright>=0.7,<1",
     "pytest>=8.3,<9",
     "ruff>=0.12,<1",
     "jupyter>=1.0",
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra -m 'not e2e'"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["e2e: browser tests that require the portal and its API double"]
 
 [tool.ruff]
 target-version = "py312"

@@ -8,7 +8,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="TRIAGE_ML_", env_file=".env", extra="forbid")
+    # Compose may read ``.env`` and passes only this service's declared variables.
+    # The application itself reads process environment only, preventing unrelated
+    # secrets from other services from being included in validation errors.
+    model_config = SettingsConfigDict(env_prefix="TRIAGE_ML_", extra="forbid")
 
     api_key_service: str = Field(min_length=32)
     api_key_doctor: str = Field(min_length=32)

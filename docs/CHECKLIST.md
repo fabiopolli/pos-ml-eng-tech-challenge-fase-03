@@ -2,7 +2,7 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-08-30 — validação de segurança e limite de requisições da API oficial.
+Última atualização: 2026-09-05 — jornada segura do paciente e testes E2E do portal validados localmente.
 
 ## Visão geral e responsáveis
 
@@ -111,6 +111,7 @@ Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP fu
 - [X] Adicionar testes unitários e de integração.
 - [X] Medir baseline de latência local com metodologia documentada (gancho para a Etapa 5).
 - [ ] Empacotar o serviço em Docker (parte do entregável do Fábio, mas dirigido a esta API).
+- [x] Demonstrar login por papel e jornada do paciente sem expor diagnóstico, classe ou score.
 
 **Evidência (2026-08-30):** a API oficial aplica RBAC estático com negação padrão,
 limites independentes por IP e fingerprint de chave, e não emite `text` clínico nem
@@ -127,13 +128,22 @@ Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta 
 ### CI/CD, Docker e testes — Fábio
 
 - [x] Criar CI com lockfile, formatação, lint, pytest e build do pacote em push/PR para `main`.
-- [ ] Ampliar testes conforme API, modelo e DAG forem integrados.
+- [~] Ampliar testes conforme API, modelo, front e DAG forem integrados.
+- [x] Testar o portal no Chromium com Playwright e preservar evidências de falha no CI.
 - [ ] Criar Dockerfile funcional para inferência (imagem da API oficial).
 - [ ] Adicionar build da imagem ao CI.
 - [ ] Documentar execução local e no CI.
 - [ ] Confirmar primeiro workflow verde no GitHub.
 
 Aceite oficial (15%): GitHub Actions executando ao menos lint e testes básicos, build da imagem verde.
+
+**Evidência local do front 2026-09-05:** três testes Playwright aprovados no
+Chromium: credenciais inválidas permanecem no login; paciente percorre revisão e
+orientação, encerra a sessão e produz zero chamadas a `/predict`; médico autentica,
+visualiza o aviso de apoio não diagnóstico e executa uma predição server-side. O job
+`front-e2e` repete os cenários no GitHub Actions e retém logs, screenshots e traces de
+falha no artefato `front-e2e-evidence` por 14 dias. A confirmação remota permanece
+pendente até a execução do workflow no PR.
 
 ## Etapa 5 — Otimização do modelo (Bill)
 
