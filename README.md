@@ -302,6 +302,58 @@ Após o healthcheck, acesse a API em `http://localhost:8000`, o portal por papel
 usam a rede interna do Compose; somente os processos Streamlit recebem as chaves necessárias
 às suas funções, sempre no servidor e nunca incorporadas às imagens.
 
+### Como usar os dois fronts
+
+Os dashboards têm públicos diferentes e não são redundantes:
+
+| Front | Serviço | Uso recomendado |
+|---|---|---|
+| `front/app_prod.py` | `portal-prod` | demonstração para médico e paciente, com login e RBAC |
+| `front/app_dev.py` | `dashboard-dev` | validação técnica de health, modelo, idioma, predição e reload |
+
+No portal, a sessão de paciente percorre uma jornada informativa e não recebe classe, score
+ou diagnóstico automático. A sessão médica pode enviar um texto clínico sintético em inglês
+para apoio à triagem; a decisão final permanece humana. A chave médica fica no processo
+Streamlit e não é enviada ao navegador.
+
+No dashboard técnico, o avaliador pode inspecionar o artefato carregado, métricas, versões,
+política de idioma e respostas HTTP. O reload deve ser usado somente em ambiente local de
+desenvolvimento.
+
+Os cenários completos, credenciais demonstrativas e a sequência sugerida para o vídeo estão
+no [`Guia de uso dos fronts`](docs/guides/GUIA-USO-FRONTS.md).
+
+### Testes do front no CI
+
+O job `front-e2e` usa Playwright com Chromium e uma API determinística exclusiva de teste.
+Ele valida credenciais inválidas, login e logout, acesso médico e a jornada do paciente. O
+teste também comprova que a sessão do paciente produz zero chamadas a `POST /predict`.
+Em falhas, logs, screenshots e traces ficam disponíveis no artefato
+`front-e2e-evidence` do GitHub Actions por 14 dias.
+
+Para executar os testes de navegador localmente:
+
+```powershell
+uv run playwright install chromium
+uv run pytest tests/e2e -m e2e --browser chromium --output test-results/playwright `
+  --screenshot only-on-failure --tracing retain-on-failure
+```
+
+O teste local requer o portal e a API de teste iniciados conforme descrito no
+[`README dos fronts`](front/README.md#testes-de-navegador).
+
+### Quando o `.env` precisa do DagsHub
+
+Para executar apenas `api-prod`, `portal-prod` e `dashboard-dev`, **não é necessário**
+preencher `DAGSHUB_USERNAME` ou `DAGSHUB_USER_TOKEN`. O modelo já deve existir localmente em
+`models/<versao>/`, e somente `API_MODEL_PATH`, chaves da API e credenciais do portal são
+necessárias.
+
+As variáveis do DagsHub são exigidas apenas ao executar o Airflow com ingestão remota pelo
+`docker-compose.airflow.yml`. Use um token de leitura, nunca a senha da conta, e mantenha o
+`.env` fora do Git. Mesmo quando o repositório aparece como público, o endpoint Git do
+DagsHub pode solicitar autenticação.
+
 O serviço falha rapidamente se faltar uma chave, se o modelo não existir ou se as versões
 de NumPy, SciPy e scikit-learn forem incompatíveis com o manifesto do artefato. Essas
 dependências ficam fixadas no `pyproject.toml` e no `uv.lock` para treino e inferência
@@ -313,9 +365,8 @@ API, portal e dashboard, importa a aplicação ASGI e audita usuário e metadado
 Modelos e segredos não são necessários nem incluídos nesse build. A execução remota nº 39
 foi concluída com sucesso no [PR #5](https://github.com/fabiopolli/pos-ml-eng-tech-challenge-fase-03/pull/5).
 
-Para os casos de uso do médico, paciente e dashboard técnico, consulte o
-[`Guia de uso dos fronts`](docs/guides/GUIA-USO-FRONTS.md). A validação detalhada das
-imagens está em [`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
+A validação detalhada das imagens está em
+[`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
 
 ## Plano de implementação
 
