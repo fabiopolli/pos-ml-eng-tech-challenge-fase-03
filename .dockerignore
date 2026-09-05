@@ -5,10 +5,14 @@
 __pycache__
 .pytest_cache
 .ruff_cache
+airflow/logs
 data
-notebooks
-reports
 models
+reports
+notebooks
 tests
 *.log
+*.joblib
+*.pkl
+*.onnx
 .env*
