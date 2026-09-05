@@ -152,6 +152,6 @@ publica logs, screenshots e traces de falha no artefato `front-e2e-evidence` por
 variáveis demonstrativas descritas acima e execute:
 
 ```powershell
-uv run pytest tests/e2e --browser chromium --output test-results/playwright `
+uv run pytest tests/e2e -m e2e --browser chromium --output test-results/playwright `
   --screenshot only-on-failure --tracing retain-on-failure
 ```
