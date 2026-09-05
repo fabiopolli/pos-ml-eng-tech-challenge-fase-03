@@ -171,14 +171,14 @@ Aceite oficial (junto com Etapa 5 fecha 20%): stack completa no Compose e dashbo
 
 ### DAG Airflow — Denis
 
-- [ ] Consumir `triage_ml.models.train.run_training` (ou equivalente) em vez de duplicar lógica.
-- [ ] Implementar ingestão/leitura do CSV.
-- [ ] Implementar validação/preparação reaproveitando `triage_ml.data.prepare`.
-- [ ] Implementar treino e avaliação.
-- [ ] Persistir artefato e metadados no caminho configurável do contrato.
-- [ ] Garantir configuração portátil e tarefas idempotentes quando possível.
+- [x] Consumir `triage_ml.models.train.run_training` (ou equivalente) em vez de duplicar lógica.
+- [x] Implementar ingestão/leitura do CSV.
+- [x] Implementar validação/preparação reaproveitando `triage_ml.data.prepare`.
+- [x] Implementar treino e avaliação.
+- [x] Persistir artefato e metadados no caminho configurável do contrato.
+- [x] Garantir configuração portátil e tarefas idempotentes quando possível.
 - [ ] Testar/importar a DAG sem erros e registrar evidência de execução.
-- [ ] Suportar retreino disparando a partir da Etapa 8 (cloud) ou manualmente.
+- [x] Suportar retreino disparando a partir da Etapa 8 (cloud) ou manualmente.
 
 Aceite oficial (15%): DAG funcional realizando ingestão e treino, com modelo salvo no caminho versionado.
 

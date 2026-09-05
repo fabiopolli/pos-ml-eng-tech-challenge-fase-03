@@ -71,10 +71,23 @@ não seria defensável. O relatório retornado pela função registra todas as e
 O split usa seed 42, estratificação por target e exige unicidade pela chave normalizada.
 Uma asserção confirma que nenhum texto equivalente aparece simultaneamente em treino e teste.
 
-## Obtenção local
+## Obtenção local e ingestão orquestrada
 
-Baixe `medical_tc_train.csv` da fonte canônica e salve-o localmente em `data/`. O arquivo
-é ignorado pelo Git. A partir da raiz do projeto, a preparação pode ser executada assim:
+Uma cópia operacional do dataset é mantida na branch `main` do remoto DagsHub
+`https://dagshub.com/deniscelclaro/pos-ml-eng-tech-challenge-fase-03.git`. Essa cópia não
+substitui a origem e a licença canônicas documentadas acima.
+
+Para obter somente o arquivo no checkout atual, sem mesclar o código do remoto de dados:
+
+```bash
+git fetch dagshub main
+git restore --source=dagshub/main --worktree -- data/medical_tc_train.csv
+```
+
+O arquivo continua ignorado no GitHub principal. A DAG `triage_ml_retraining` automatiza
+essa ingestão usando um clone temporário isolado, valida o conteúdo e publica somente o
+CSV esperado em `data/`. A partir da raiz do projeto, a preparação manual pode ser
+executada assim:
 
 ```python
 import pandas as pd
