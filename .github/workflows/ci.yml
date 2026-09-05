@@ -37,7 +37,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Test
-        run: uv run pytest --ignore=tests/e2e
+        run: uv run pytest
 
       - name: Build package
         run: uv build
@@ -99,7 +99,7 @@ jobs:
             fi
             sleep 1
           done
-          uv run pytest tests/e2e --browser chromium --output test-results/playwright \
+          uv run pytest tests/e2e -m e2e --browser chromium --output test-results/playwright \
             --screenshot only-on-failure --tracing retain-on-failure
 
       - name: Upload browser-test evidence

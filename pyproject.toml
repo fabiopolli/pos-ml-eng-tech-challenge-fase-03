@@ -48,7 +48,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra -m 'not e2e'"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = ["e2e: browser tests that require the portal and its API double"]
