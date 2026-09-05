@@ -129,6 +129,28 @@ def test_predict_posts_json_payload(dashboard_module):
     assert result.body["label_name"] == "neoplasms"
 
 
+def test_predict_uses_optional_server_side_doctor_key(dashboard_module):
+    response = _FakeResponse(status_code=200, body={"label": 4})
+    with (
+        patch.object(dashboard_module, "DEV_API_KEY_DOCTOR", "doctor-container-key"),
+        patch.object(dashboard_module.requests, "request", return_value=response) as mocked,
+    ):
+        dashboard_module._post_predict("http://api.example.com", "Synthetic clinical text")
+
+    assert mocked.call_args.kwargs["headers"]["X-API-Key"] == "doctor-container-key"
+
+
+def test_reload_uses_optional_server_side_service_key(dashboard_module):
+    response = _FakeResponse(status_code=200, body={"model_version": "v2"})
+    with (
+        patch.object(dashboard_module, "DEV_API_KEY_SERVICE", "service-container-key"),
+        patch.object(dashboard_module.requests, "request", return_value=response) as mocked,
+    ):
+        dashboard_module._reload_model("http://api.example.com", "v2")
+
+    assert mocked.call_args.kwargs["headers"]["X-API-Key"] == "service-container-key"
+
+
 def test_invalid_json_body_is_wrapped_in_raw(dashboard_module):
     response = _FakeResponse(status_code=500, body={})
     response.json = MagicMock(side_effect=ValueError("not json"))

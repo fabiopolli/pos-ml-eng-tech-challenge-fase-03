@@ -38,6 +38,7 @@ Docker, cloud) e respeita o contrato da API oficial.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,7 +50,9 @@ import streamlit as st
 # --- Constantes visuais (dark mode premium, identidade da Fase 02) ---
 PAGE_TITLE = "triage_ml — Dev API"
 PAGE_ICON = "🧪"
-DEFAULT_API_URL = "http://127.0.0.1:8000"
+DEFAULT_API_URL = os.environ.get("TRIAGE_ML_DEV_API_URL", "http://127.0.0.1:8000")
+DEV_API_KEY_DOCTOR = os.environ.get("TRIAGE_ML_DEV_API_KEY_DOCTOR")
+DEV_API_KEY_SERVICE = os.environ.get("TRIAGE_ML_DEV_API_KEY_SERVICE")
 REQUEST_TIMEOUT_SECONDS = 10.0
 SUCCESS_STATUS = 200
 MAX_ERROR_BODY_CHARS = 2_000
@@ -119,15 +122,19 @@ def _request_json(
     url: str,
     *,
     payload: dict[str, Any] | None = None,
+    api_key: str | None = None,
 ) -> ApiResponse:
     """Wrapper que centraliza timeout, headers e parsing JSON."""
 
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
     response = requests.request(
         method=method,
         url=_normalize_api_url(url),
         json=payload,
         timeout=REQUEST_TIMEOUT_SECONDS,
-        headers={"Accept": "application/json"},
+        headers=headers,
         allow_redirects=False,
     )
     elapsed_ms = response.elapsed.total_seconds() * 1000.0
@@ -176,6 +183,7 @@ def _post_predict(api_url: str, text: str) -> ApiResponse:
         "POST",
         f"{api_url.rstrip('/')}/predict",
         payload={"text": text},
+        api_key=DEV_API_KEY_DOCTOR,
     )
 
 
@@ -215,6 +223,7 @@ def _reload_model(api_url: str, model_version: str) -> ApiResponse:
         "POST",
         f"{api_url.rstrip('/')}/reload",
         payload={"model_version": model_version},
+        api_key=DEV_API_KEY_SERVICE,
     )
 
 
