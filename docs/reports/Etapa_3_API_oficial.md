@@ -6,7 +6,7 @@
 | Etapa do checklist | Etapa 3 — API FastAPI oficial (`docs/CHECKLIST.md`) |
 | Período desta entrega | 2026-08-30 a 2026-08-31 |
 | Última revisão | 2026-08-31 — relatório técnico e evidências de validação |
-| Status | ✅ API, RBAC, benchmark e portal demonstrativo concluídos localmente; Docker/Compose seguem com Fábio |
+| Status | ✅ API, RBAC, benchmark, portal e empacotamento Docker concluídos localmente |
 
 Este relatório documenta a promoção do contrato da API de desenvolvimento de Bill para uma API oficial. A implementação continua usando o artefato real de ML, mas adiciona autenticação por papel, limite de requisições, rastreabilidade, erros/logs sanitizados, baseline de latência e interface de demonstração clínica.
 
@@ -253,7 +253,7 @@ docs/adr/0002-rbac-estatico-api-producao.md    # decisão de RBAC
 
 | Tema | Status | Próximo passo/responsável |
 |---|---|---|
-| Docker, Compose e imagem | Pendente | Fábio cria e valida imagem de inferência. |
+| Docker, Compose e imagem | Concluído localmente | Evidência em `Etapa_4_CI_CD_Docker.md`; CI remoto aguarda PR verde. |
 | Rate limit distribuído | Limitação conhecida | Redis/armazenamento compartilhado em múltiplas instâncias. |
 | Login do portal | Demonstração local | IdP, tokens assinados e cofre de segredos em cloud. |
 | ONNX | Pendente | Bill compara baseline com variante otimizada. |

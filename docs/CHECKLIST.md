@@ -2,16 +2,16 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-09-05 — jornada segura do paciente e testes E2E do portal validados localmente.
+Última atualização: 2026-09-05 — API em Docker e jornada do portal com testes E2E validadas localmente.
 
 ## Visão geral e responsáveis
 
 - [x] Repositório e arquitetura inicial — Fábio
 - [x] EDA e escolha do dataset — Denis
 - [x] Classificador de texto (baseline) — Bill
-- [ ] API FastAPI — Romário
+- [x] API FastAPI — Romário
 - [~] CI/CD, Docker e testes — Fábio
-- [ ] DAG Airflow — Denis
+- [x] DAG Airflow — Denis
 - [ ] Otimização de latência e observabilidade — Bill
 - [ ] Arquitetura em nuvem — Romário
 - [~] Documentação detalhada — Fábio
@@ -110,7 +110,7 @@ Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP fu
 - [X] Manter `latency_ms`, `request_id`, `X-Request-ID` e `Server-Timing` herdados da Etapa 2.
 - [X] Adicionar testes unitários e de integração.
 - [X] Medir baseline de latência local com metodologia documentada (gancho para a Etapa 5).
-- [ ] Empacotar o serviço em Docker (parte do entregável do Fábio, mas dirigido a esta API).
+- [x] Empacotar o serviço em Docker (parte do entregável do Fábio, mas dirigido a esta API).
 - [x] Demonstrar login por papel e jornada do paciente sem expor diagnóstico, classe ou score.
 
 **Evidência (2026-08-30):** a API oficial aplica RBAC estático com negação padrão,
@@ -120,6 +120,9 @@ login médico/paciente, mantém a chave médica no processo servidor e nunca cha
 `/predict` na sessão de paciente. A suíte local possui 130 testes, incluindo cenários
 positivos/negativos de papéis, rate limit, settings estritos, sanitização e helpers
 do portal. O baseline HTTP permanece em `reports/benchmarks/api-prod-baseline.json`.
+A imagem da API foi validada em 2026-09-05 com o artefato real produzido pelo Airflow:
+healthcheck saudável, execução como `uid=10001`, modelo carregado, bloqueio patient `403`,
+predição doctor e headers `X-Request-ID`/`Server-Timing` confirmados.
 
 Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta documentado.
 
@@ -128,11 +131,11 @@ Aceite oficial (parte da Etapa 8): API funcional, baseline de tempo de resposta 
 ### CI/CD, Docker e testes — Fábio
 
 - [x] Criar CI com lockfile, formatação, lint, pytest e build do pacote em push/PR para `main`.
-- [~] Ampliar testes conforme API, modelo, front e DAG forem integrados.
+- [x] Ampliar testes conforme API, modelo, front e DAG forem integrados.
 - [x] Testar o portal no Chromium com Playwright e preservar evidências de falha no CI.
-- [ ] Criar Dockerfile funcional para inferência (imagem da API oficial).
-- [ ] Adicionar build da imagem ao CI.
-- [ ] Documentar execução local e no CI.
+- [x] Criar Dockerfile funcional para inferência (imagem da API oficial).
+- [x] Adicionar build da imagem ao CI.
+- [x] Documentar execução local e no CI.
 - [ ] Confirmar primeiro workflow verde no GitHub.
 
 Aceite oficial (15%): GitHub Actions executando ao menos lint e testes básicos, build da imagem verde.
@@ -144,6 +147,12 @@ visualiza o aviso de apoio não diagnóstico e executa uma predição server-sid
 `front-e2e` repete os cenários no GitHub Actions e retém logs, screenshots e traces de
 falha no artefato `front-e2e-evidence` por 14 dias. A confirmação remota permanece
 pendente até a execução do workflow no PR.
+
+**Evidência local 2026-09-05:** build multi-stage concluído; imagem de aproximadamente
+289 MB; Compose saudável com modelo real montado em modo somente leitura; Ruff aprovado e
+140 testes aprovados (1 teste de symlink desconsiderado por privilégio do Windows). Detalhes
+e comandos em `docs/reports/Etapa_4_CI_CD_Docker.md`. O aceite remoto permanece pendente até
+o novo job `container` concluir verde no GitHub Actions.
 
 ## Etapa 5 — Otimização do modelo (Bill)
 

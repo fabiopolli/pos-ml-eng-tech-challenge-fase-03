@@ -2,7 +2,9 @@
 
 Sistema de triagem automática de textos médicos, construído como um classificador NLP leve e servido por uma API REST. O projeto reúne treinamento e otimização do modelo, CI/CD, retreino orquestrado, observabilidade e uma proposta de implantação em nuvem.
 
-> Status: fundação arquitetural concluída. Os componentes funcionais serão entregues incrementalmente pelas branches de cada integrante.
+> Status: fundação, modelo baseline, API oficial e Airflow funcionais. A API possui imagem
+> Docker validada localmente; otimização, observabilidade e arquitetura em nuvem continuam
+> em desenvolvimento.
 
 ## Equipe e responsabilidades
 
@@ -86,7 +88,7 @@ Como os candidatos estão em inglês, a recomendação inicial é manter a infer
 
 Os diretórios reservados contêm arquivos explicativos. Código reutilizável deve sair dos notebooks e entrar em `src/triage_ml`.
 
-## Início rápido da fundação
+## Início rápido
 
 Pré-requisitos: Python 3.12 e [`uv`](https://docs.astral.sh/uv/).
 
@@ -96,17 +98,20 @@ uv run ruff check .
 uv run pytest
 ```
 
-Os comandos da API, Airflow e stack de observabilidade serão acrescentados quando os respectivos componentes existirem; este README não declara funcionalidades ainda não implementadas.
+Para executar a API oficial em Docker, consulte a seção [API oficial em Docker](#api-oficial-em-docker).
+O Airflow possui instruções próprias em [`airflow/dags/README.md`](airflow/dags/README.md).
+Prometheus e Grafana permanecem planejados e serão adicionados sem alterar o contrato da API.
 
 ## Checklist resumido
 
 - [x] Criar repositório e definir arquitetura inicial — Fábio
 - [x] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
 - [x] Treinar classificador de texto (baseline TF-IDF + classificador linear) — Bill
-- [~] Construir API FastAPI — Romário (Bill disponibilizou uma API de desenvolvimento em `src/triage_ml/dev_api/` para acelerar validações locais; não é a entrega oficial)
-- [~] Configurar CI/CD, Docker e testes — Fábio (CI inicial criado; Docker pendente)
-- [~] Implementar DAG Airflow funcional — Denis (DAG, ingestão DagsHub, testes e Compose
-  implementados; execução completa em Docker pendente)
+- [x] Construir API FastAPI — Romário; imagem Docker da API oficial validada por Fábio
+- [~] Configurar CI/CD, Docker e testes — Fábio (imagem local validada; build remoto da
+  imagem aguarda o próximo PR)
+- [x] Implementar DAG Airflow funcional — Denis (execução completa e idempotência
+  validadas em Docker contra o DagsHub)
 - [ ] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill
 - [ ] Documentar arquitetura em nuvem — Romário
 - [~] Manter documentação detalhada — Fábio (documento vivo)
@@ -247,7 +252,45 @@ uv run ruff check .       # lint
 uv run ruff format --check .  # verificação de formatação
 ```
 
-### Plano de implementação
+## API oficial em Docker
+
+A imagem na raiz executa `triage_ml.api.app:app` com um worker, usuário não-root e
+healthcheck nativo. O modelo não entra na imagem: `models/` é montado somente para leitura.
+O Compose também remove capabilities Linux, bloqueia ganho de privilégios e deixa o
+filesystem do contêiner somente para leitura, com um `tmpfs` limitado em `/tmp`.
+
+Antes da primeira execução, copie `.env.example` para `.env` e configure:
+
+```dotenv
+API_MODEL_PATH=/models/<versao>/model.joblib
+TRIAGE_ML_API_KEY_SERVICE=<chave-com-32-ou-mais-caracteres>
+TRIAGE_ML_API_KEY_DOCTOR=<chave-com-32-ou-mais-caracteres>
+TRIAGE_ML_API_KEY_PATIENT=<chave-com-32-ou-mais-caracteres>
+```
+
+`API_MODEL_PATH` usa o caminho **interno** do contêiner. As chaves do exemplo devem ser
+substituídas; `.env` é local e ignorado pelo Git. A aplicação lê somente variáveis de
+processo com prefixo `TRIAGE_ML_`; o Compose é responsável por selecionar o que sai do
+arquivo compartilhado `.env` e entra no serviço.
+
+```bash
+docker compose up --build -d api-prod
+docker compose ps api-prod
+curl http://localhost:8000/health
+docker compose logs --tail=100 api-prod
+docker compose down
+```
+
+O serviço falha rapidamente se faltar uma chave, se o modelo não existir ou se as versões
+de NumPy, SciPy e scikit-learn forem incompatíveis com o manifesto do artefato. Essas
+dependências ficam fixadas no `pyproject.toml` e no `uv.lock` para treino e inferência
+usarem o mesmo contrato de serialização.
+
+No GitHub Actions, o job `quality` verifica lockfile, formato, lint, testes e pacote. Após
+ele passar, o job `container` constrói o `Dockerfile` e importa a aplicação ASGI dentro da
+imagem. Modelos e segredos não são necessários nem incluídos nesse build.
+
+## Plano de implementação
 
 O detalhamento completo (Fase 1 e Fase 2) está em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md). A Fase 2 — otimização ONNX, Prometheus, Grafana e dashboard — ainda não foi executada.
 
