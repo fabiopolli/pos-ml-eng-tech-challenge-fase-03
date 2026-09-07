@@ -131,19 +131,40 @@ def test_settings_reject_short_api_keys(field: str) -> None:
         make_settings(**{field: "too-short"})
 
 
-@pytest.mark.parametrize(
-    ("api_key", "expected"),
-    [
-        (None, "anonymous"),
-        (DOCTOR_KEY, "e8b26f0feedcbc8d4a5b3600409a73ba38f144c8dbdc76df9d11e03663d2beb6"),
-        (PATIENT_KEY, "59f899a07088b886354246a27fd32abc3cb1b21b2f4609bb1c50b68f5bf04732"),
-    ],
-)
-def test_rate_limit_identifier_never_returns_api_key(api_key: str | None, expected: str) -> None:
+@pytest.mark.parametrize("api_key", [None, DOCTOR_KEY, PATIENT_KEY])
+def test_rate_limit_identifier_never_returns_api_key(api_key: str | None) -> None:
     fingerprint = get_api_key_fingerprint(request_with_api_key(api_key))
 
-    assert fingerprint == expected
-    assert api_key is None or api_key not in fingerprint
+    if api_key is None:
+        assert fingerprint == "anonymous"
+    else:
+        # The fingerprint is salted HMAC-SHA-256 prefixed with "k:" so an
+        # attacker rotating X-API-Key headers cannot pre-compute buckets or
+        # cross-reference with rainbow tables. We assert the structural
+        # invariants here; the salt keeps the value opaque from the test.
+        assert fingerprint.startswith("k:")
+        assert len(fingerprint) == 2 + 64
+        assert api_key not in fingerprint
+
+
+def test_rate_limit_identifier_is_stable_for_same_key() -> None:
+    """A given API key must always resolve to the same fingerprint within a
+    process. Otherwise the rate limit bucket would reset on every call."""
+
+    fingerprint_a = get_api_key_fingerprint(request_with_api_key(DOCTOR_KEY))
+    fingerprint_b = get_api_key_fingerprint(request_with_api_key(DOCTOR_KEY))
+
+    assert fingerprint_a == fingerprint_b
+
+
+def test_rate_limit_identifier_changes_when_key_changes() -> None:
+    """Different API keys must produce different fingerprints, otherwise a
+    caller rotating the header could share a bucket with another caller."""
+
+    fingerprint_a = get_api_key_fingerprint(request_with_api_key(DOCTOR_KEY))
+    fingerprint_b = get_api_key_fingerprint(request_with_api_key(PATIENT_KEY))
+
+    assert fingerprint_a != fingerprint_b
 
 
 def test_predict_is_limited_per_request_identity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,12 +255,31 @@ def test_health_reports_loaded_model(monkeypatch: pytest.MonkeyPatch) -> None:
     assert response.json()["model_loaded"] is True
 
 
+def test_model_info_requires_authentication(monkeypatch: pytest.MonkeyPatch) -> None:
+    with api_client(monkeypatch) as client:
+        response = client.get("/model-info")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "unauthorized"
+
+
+def test_models_requires_authentication(monkeypatch: pytest.MonkeyPatch) -> None:
+    with api_client(monkeypatch) as client:
+        response = client.get("/models")
+
+    assert response.status_code == 401
+    assert response.json()["error_code"] == "unauthorized"
+
+
 def test_model_info_returns_sanitized_not_ready_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even after auth, /model-info must surface a sanitized 503 when no
+    artifact is loaded (no leakage of internal pipeline state)."""
+
     unloaded_holder = DummyHolder()
     unloaded_holder.pipeline = None
 
     with api_client(monkeypatch, holder=unloaded_holder) as client:
-        response = client.get("/model-info")
+        response = client.get("/model-info", headers={"X-API-Key": DOCTOR_KEY})
 
     assert response.status_code == 503
     assert response.json()["error_code"] == "model_not_ready"
