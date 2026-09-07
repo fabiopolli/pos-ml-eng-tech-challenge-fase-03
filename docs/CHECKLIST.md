@@ -52,6 +52,8 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 
 > Mudança 2026-08-23: o requisito "nenhum segredo/dado clínico em logs" ganhou dono implícito (Bill, na Etapa 6 — observabilidade) e critério verificável (teste automatizado que varre labels Prometheus, payloads de erro e formato de logs).
 
+> Atualização 2026-09-07 (revisão cruzada da Etapa 1): Bill executou revisão estática da Etapa 1 e encontrou quatro pontos. (1) `notebooks/01_eda.ipynb` tinha um `df.head(3)` na célula de inspeção cujos `outputs` persistidos embutiam 3 abstracts clínicos no HTML do notebook — substituído por `print` agregado e `outputs` zerados. (2) `docs/adr/0001-escolha-recorte-dataset.md` foi criado sintetizando o que já estava em `docs/dataset.md` e no relatório da Etapa 1. (3) O checkbox "Contrato de Airflow/artefato" da linha 73 foi marcado como concluído porque o gate já foi satisfeito pela Etapa 7 (DAG configurável e idempotente). (4) A faixa `target ∈ {1..5}` foi explicitada em `.agents/contracts/README.md` (contrato de dados) e em `docs/dataset.md` (schema e labels), alinhando a documentação ao que `prepare.py` já enforçava. Lint e os 16 testes de `tests/test_data_preparation.py` continuam verdes.
+
 ## Etapa 1 — Fundação, dados e contratos
 
 ### Dataset e EDA — Denis
@@ -70,7 +72,7 @@ Aceite: notebook/relatório reprodutível, dataset escolhido e contrato de dados
 - [x] Contrato de dados definido em `.agents/contracts/README.md`.
 - [x] Contrato de modelo (versão, classes, métricas, preprocessing) e serialização segundo contrato.
 - [x] Contrato de API inicial proposto; sujeito à validação de Romário antes de promover.
-- [ ] Contrato de Airflow/artefato (caminho configurável, idempotência) revisado por Denis antes da Etapa 7.
+- [x] Contrato de Airflow/artefato (caminho configurável, idempotência) revisado por Denis antes da Etapa 7. Coberto pela seção "Artefatos e Airflow" de `.agents/contracts/README.md` e validado na Etapa 7 (DAG `triage_ml_retraining` com `TRIAGE_RAW_CSV`/`TRIAGE_MODELS_DIR`/`TRIAGE_REPORTS_DIR`/`TRIAGE_TRAINING_CONFIG` por `os.getenv`, `max_active_runs=1` e evidência de `reused=true` na segunda execução registrada na Etapa 7).
 
 Aceite: contratos em `.agents/contracts/README.md` estáveis antes do início da Etapa 2.
 
