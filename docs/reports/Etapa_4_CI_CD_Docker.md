@@ -57,14 +57,23 @@ O arquivo `.env.example` documenta as variáveis. No Compose, `API_MODEL_PATH` d
 para `/models/<versao>/model.joblib`, enquanto o diretório local `./models` é montado em
 `/models:ro`.
 
-As três chaves precisam ter pelo menos 32 caracteres:
+As três chaves da API de produção precisam ter pelo menos 32 caracteres:
 
 - `TRIAGE_ML_API_KEY_SERVICE`;
 - `TRIAGE_ML_API_KEY_DOCTOR`;
 - `TRIAGE_ML_API_KEY_PATIENT`.
 
-Nenhuma chave possui valor padrão. O contêiner não recebe as credenciais do DagsHub nem
-outras variáveis presentes no `.env` compartilhado.
+O dashboard técnico (`dashboard-dev`, em `profiles: [dev]`) usa chaves dedicadas para
+não tocar nas chaves de produção:
+
+- `TRIAGE_ML_DEV_API_URL` (default `http://api-dev:8000`);
+- `TRIAGE_ML_DEV_API_KEY_DOCTOR`;
+- `TRIAGE_ML_DEV_API_KEY_SERVICE`.
+
+Nenhuma chave possui valor padrão. O contêiner da API não recebe as credenciais do
+DagsHub nem outras variáveis presentes no `.env` compartilhado. No Airflow, a flag
+`TRIAGE_REQUIRE_AUTH` (default `false`) habilita a checagem de
+`DAGSHUB_USERNAME`/`DAGSHUB_USER_TOKEN` no entrypoint antes de subir o serviço.
 
 ## Comandos reproduzíveis
 
@@ -74,10 +83,20 @@ uv run ruff format --check .
 uv run ruff check .
 uv run pytest
 docker compose config --quiet
-docker compose build api-prod portal-prod dashboard-dev
-docker compose up -d --wait api-prod portal-prod dashboard-dev
+# Stack mínimo de produção: api-prod + portal-prod
+docker compose build api-prod portal-prod
+docker compose up -d --wait api-prod portal-prod
 docker compose ps
 docker compose down
+# Dashboard técnico isolado em perfil "dev" (não sobe junto do stack mínimo)
+docker compose --profile dev build dashboard-dev
+docker compose --profile dev up -d --wait dashboard-dev
+docker compose --profile dev down
+# Airflow (compose overlay) — exige TRIAGE_REQUIRE_AUTH=true quando o
+# repositório de dados for privado.
+docker compose -f docker-compose.airflow.yml build airflow
+docker compose -f docker-compose.airflow.yml up -d --wait airflow
+docker compose -f docker-compose.airflow.yml down
 ```
 
 ## Validação remota
@@ -92,22 +111,28 @@ portal e dashboard:
 
 Após o aceite oficial, Bill executou revisão estática cruzada com cuidado redobrado
 (alto risco por empacotamento de produção, segredos e contratos CI) e cross-validação
-com dois sub-agentes. Os pontos consolidados foram aplicados em commit direto à `main`:
+com dois sub-agentes. Os pontos consolidados foram aplicados no commit `0e21dae`
+direto à `main`:
 
 - `dashboard-dev` desacoplado de `api-prod` (perfil `dev` dedicado, chaves
   `TRIAGE_ML_DEV_API_KEY_*`), evitando deploys cruzados acidentais;
 - `fake_api.py` usa `hmac.compare_digest` em vez de comparação não constant-time;
-- job `front-e2e` em `ci.yml` ganhou `trap cleanup EXIT` e `set -euo pipefail`,
-  encerrando `uvicorn`/`streamlit` mesmo em falha de teste;
-- loop de readiness corrigido (`seq 1 30` + ordem correta do `sleep`);
+- job `front-e2e` em `ci.yml` ganhou `set -euo pipefail`, captura explícita dos
+  PIDs de `uvicorn`/`streamlit`, função `cleanup` e `trap cleanup EXIT` para
+  encerrar processos em background mesmo em falha de teste;
+- loop de readiness corrigido (`seq 1 30` com a checagem de "última tentativa"
+  depois do `sleep 1`);
 - smoke-test do job `container` valida `app.openapi()['info']['title']` e a presença
   de `/predict` em vez de comparar string literal;
 - `Dockerfile` builder copia `.python-version` para reproducibilidade cruzada;
 - Airflow ganhou `entrypoint.sh` registrado como `ENTRYPOINT` e flag
-  `TRIAGE_REQUIRE_AUTH` no compose para falhar cedo quando faltarem credenciais
-  DagsHub;
+  `TRIAGE_REQUIRE_AUTH` (default `false`) no `docker-compose.airflow.yml` para
+  falhar cedo quando faltarem credenciais DagsHub;
 - testes estruturais (`test_api_container.py`, `test_repository_structure.py`)
-  ajustados para refletir o novo isolamento do dashboard técnico e incluir os novos
-  arquivos `airflow/Dockerfile`/`airflow/entrypoint.sh`.
+  ajustados para refletir o novo isolamento do dashboard técnico e exigir a
+  presença dos novos arquivos `airflow/Dockerfile` e `airflow/entrypoint.sh`;
+- `src/triage_ml/api/app.py` reformado pelo `ruff format` (sem mudança de
+  comportamento).
 
-A suíte completa (152 testes) permanece verde após as mudanças.
+A suíte completa (152 testes, 3 e2e desativados por padrão) permanece verde após
+as mudanças; `ruff check` e `ruff format --check` aprovados.
