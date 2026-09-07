@@ -252,6 +252,24 @@ def test_invalid_artifact_fails_during_startup(tmp_path: Path) -> None:
             pass
 
 
+def test_language_config_incompatible_error_is_preserved_in_telemetry(
+    client: TestClient,
+    holder: ModelHolder,
+) -> None:
+    """When the runtime API config rejects the loaded model's language, the
+    error_code must remain ``language_config_incompatible`` and not collapse
+    to the generic ``request_failed`` fallback (which would lose visibility
+    on configuration drift)."""
+
+    holder.metadata["language"] = "pt"
+    response = client.post(
+        "/predict",
+        json={"text": "We report a 62-year-old patient with an aggressive liver tumor."},
+    )
+    assert response.status_code == 500
+    assert response.json()["error_code"] == "language_config_incompatible"
+
+
 def test_model_info_returns_validated_manifest(client: TestClient) -> None:
     response = client.get("/model-info")
     assert response.status_code == 200

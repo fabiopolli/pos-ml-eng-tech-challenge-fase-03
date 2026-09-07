@@ -241,6 +241,7 @@ def create_app(
             "model_not_ready",
             "model_not_found",
             "model_incompatible",
+            "language_config_incompatible",
         } | language_codes
         error_code = exc.detail if exc.detail in allowed_codes else "request_failed"
         message = "Request could not be processed."
