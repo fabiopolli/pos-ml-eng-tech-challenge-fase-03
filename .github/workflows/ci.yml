@@ -82,13 +82,21 @@ jobs:
       - name: Run portal browser tests
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p test-results
           uv run uvicorn fake_api:app --app-dir tests/e2e --host 127.0.0.1 --port 8765 \
             >test-results/fake-api.log 2>&1 &
+          fake_api_pid=$!
           uv run streamlit run front/app_prod.py --server.headless true \
             --server.address 127.0.0.1 --server.port 8501 \
             >test-results/streamlit.log 2>&1 &
-          for attempt in {1..30}; do
+          streamlit_pid=$!
+          cleanup() {
+            kill "$fake_api_pid" "$streamlit_pid" 2>/dev/null || true
+            wait "$fake_api_pid" "$streamlit_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8765/health >/dev/null \
               && curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null; then
               break
@@ -137,7 +145,7 @@ jobs:
           --env TRIAGE_ML_API_KEY_DOCTOR=doc-000000000000000000000000000000
           --env TRIAGE_ML_API_KEY_PATIENT=pat-000000000000000000000000000000
           triage-ml-api:ci -c
-          "from triage_ml.api.app import app; assert app.title == 'Triage ML - Prod API'"
+          "from triage_ml.api.app import app; spec = app.openapi(); assert spec['info']['title']; assert '/predict' in spec['paths']"
 
       - name: Audit image runtime metadata
         shell: bash

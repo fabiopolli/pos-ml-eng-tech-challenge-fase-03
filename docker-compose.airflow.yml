@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: airflow/Dockerfile
     command: standalone
+    entrypoint: ["/opt/triage-ml/entrypoint.sh", "standalone"]
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
@@ -12,6 +13,7 @@ services:
       DATASET_RELATIVE_PATH: ${DATASET_RELATIVE_PATH:-data/medical_tc_train.csv}
       DAGSHUB_USERNAME: ${DAGSHUB_USERNAME:-}
       DAGSHUB_USER_TOKEN: ${DAGSHUB_USER_TOKEN:-}
+      TRIAGE_REQUIRE_AUTH: ${TRIAGE_REQUIRE_AUTH:-false}
       TRIAGE_RAW_CSV: /opt/triage-ml/data/medical_tc_train.csv
       TRIAGE_MODELS_DIR: /opt/triage-ml/models
       TRIAGE_REPORTS_DIR: /opt/triage-ml/reports/figures

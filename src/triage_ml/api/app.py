@@ -214,9 +214,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         return ModelInfoOut(**metadata)
 
     @app.get("/models", response_model=ModelsListOut)
-    def list_models(
-        request: Request, role: str = Depends(RequireRole(["service", "doctor"]))
-    ):
+    def list_models(request: Request, role: str = Depends(RequireRole(["service", "doctor"]))):
         # Same reasoning as /model-info: the registry fingerprint is useful
         # reconnaissance data and must stay behind RBAC.
         _, _, _, model_version = holder.snapshot()

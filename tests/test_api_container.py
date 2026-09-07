@@ -39,18 +39,26 @@ def test_api_compose_mounts_models_read_only_and_requires_secrets() -> None:
 def test_front_containers_are_isolated_and_depend_on_healthy_api() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
 
-    for name, target in (
-        ("portal-prod", "portal-runtime"),
-        ("dashboard-dev", "dev-dashboard-runtime"),
-    ):
-        service = compose["services"][name]
-        assert service["build"]["target"] == target
-        assert service["depends_on"]["api-prod"]["condition"] == "service_healthy"
-        assert service["read_only"] is True
-        assert service["cap_drop"] == ["ALL"]
-        assert service["security_opt"] == ["no-new-privileges:true"]
-
-    portal_environment = compose["services"]["portal-prod"]["environment"]
+    portal = compose["services"]["portal-prod"]
+    assert portal["build"]["target"] == "portal-runtime"
+    assert portal["depends_on"]["api-prod"]["condition"] == "service_healthy"
+    assert portal["read_only"] is True
+    assert portal["cap_drop"] == ["ALL"]
+    assert portal["security_opt"] == ["no-new-privileges:true"]
+    portal_environment = portal["environment"]
     assert portal_environment["TRIAGE_ML_PROD_API_URL"] == "http://api-prod:8000"
-    dashboard_environment = compose["services"]["dashboard-dev"]["environment"]
-    assert dashboard_environment["TRIAGE_ML_DEV_API_URL"] == "http://api-prod:8000"
+
+    dashboard = compose["services"]["dashboard-dev"]
+    assert dashboard["profiles"] == ["dev"]
+    assert dashboard["build"]["target"] == "dev-dashboard-runtime"
+    assert "depends_on" not in dashboard or "api-prod" not in dashboard.get("depends_on", {})
+    assert dashboard["read_only"] is True
+    assert dashboard["cap_drop"] == ["ALL"]
+    assert dashboard["security_opt"] == ["no-new-privileges:true"]
+    dashboard_environment = dashboard["environment"]
+    assert "TRIAGE_ML_DEV_API_URL" in dashboard_environment
+    assert "api-prod" not in dashboard_environment["TRIAGE_ML_DEV_API_URL"]
+    assert "TRIAGE_ML_DEV_API_KEY_DOCTOR" in dashboard_environment
+    assert dashboard_environment["TRIAGE_ML_DEV_API_KEY_DOCTOR"].startswith(
+        "${TRIAGE_ML_DEV_API_KEY_DOCTOR:?"
+    )

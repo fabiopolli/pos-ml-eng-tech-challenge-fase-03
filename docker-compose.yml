@@ -58,20 +58,18 @@ services:
     restart: unless-stopped
 
   dashboard-dev:
+    profiles: [dev]
     build:
       context: .
       dockerfile: Dockerfile
       target: dev-dashboard-runtime
     image: triage-ml-dashboard-dev:local
     environment:
-      TRIAGE_ML_DEV_API_URL: http://api-prod:8000
-      TRIAGE_ML_DEV_API_KEY_DOCTOR: ${TRIAGE_ML_API_KEY_DOCTOR:?Set TRIAGE_ML_API_KEY_DOCTOR}
-      TRIAGE_ML_DEV_API_KEY_SERVICE: ${TRIAGE_ML_API_KEY_SERVICE:?Set TRIAGE_ML_API_KEY_SERVICE}
+      TRIAGE_ML_DEV_API_URL: ${TRIAGE_ML_DEV_API_URL:-http://api-dev:8000}
+      TRIAGE_ML_DEV_API_KEY_DOCTOR: ${TRIAGE_ML_DEV_API_KEY_DOCTOR:?Set TRIAGE_ML_DEV_API_KEY_DOCTOR}
+      TRIAGE_ML_DEV_API_KEY_SERVICE: ${TRIAGE_ML_DEV_API_KEY_SERVICE:?Set TRIAGE_ML_DEV_API_KEY_SERVICE}
     ports:
       - "${DEV_DASHBOARD_PORT:-8502}:8501"
-    depends_on:
-      api-prod:
-        condition: service_healthy
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777

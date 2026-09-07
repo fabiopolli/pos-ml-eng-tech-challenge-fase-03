@@ -169,6 +169,42 @@ cardiovascular usando a chave fornecida somente em runtime.
 concluído com `success`, incluindo os jobs de qualidade, Playwright e build/auditoria das
 três imagens Docker.
 
+> Atualização 2026-09-07 (revisão cruzada da Etapa 4): Bill executou revisão estática
+> cruzada da Etapa 4 com cuidado redobrado (alto risco por empacotamento de produção,
+> segredos e contratos CI). Cross-validação com dois sub-agentes confirmou as correções
+> aplicadas: (1) `dashboard-dev` no `docker-compose.yml` ainda apontava para
+> `http://api-prod:8000` e reusava `TRIAGE_ML_API_KEY_DOCTOR` de produção, acoplando o
+> dev ao prod; movido para `profiles: [dev]`, removido `depends_on: api-prod` e trocadas
+> as variáveis para `TRIAGE_ML_DEV_API_URL` e `TRIAGE_ML_DEV_API_KEY_DOCTOR`
+> dedicadas, garantindo que `docker compose up` rode apenas o stack mínimo. (2)
+> `tests/e2e/fake_api.py` comparava `x_api_key != "doc-e2e-key"` (não constant-time);
+> substituído por `hmac.compare_digest` contra `EXPECTED_API_KEY` (`bytes`). (3) Job
+> `front-e2e` em `ci.yml` não tinha `trap` para encerrar `uvicorn`/`streamlit`
+> abertos em background; adicionado `cleanup` + `trap cleanup EXIT` mais
+> `set -euo pipefail`, evitando processos-zumbi e encerramentos silenciosos. (4) Loop
+> de readiness `for attempt in {1..30}` + `if [ "$attempt" -eq 30 ]` antes de `sleep 1`
+> fazia a 30ª iteração falhar sem tentar; trocado por `seq 1 30` e o `if` movido para
+> depois do `sleep`, mantendo o intervalo máximo de 30s com retentativas. (5) Smoke-test
+> do job `container` em `ci.yml` usava `assert app.title == 'Triage ML - Prod API'`
+> (acoplamento por string); trocado por `app.openapi()['info']['title']` mais
+> checagem de `'/predict' in spec['paths']`, eliminando string-coupling e validando o
+> contrato OpenAPI. (6) `Dockerfile` builder não copiava `.python-version`, deixando a
+> versão de Python implícita pela imagem base; adicionado ao `COPY` inicial para
+> reproducibilidade cruzada. (7) `airflow/Dockerfile` não validava credenciais DagsHub
+> quando o repositório era privado; criado `airflow/entrypoint.sh` com `set -euo pipefail`
+> que falha rápido se `TRIAGE_REQUIRE_AUTH=true` e `DAGSHUB_USERNAME`/`DAGSHUB_USER_TOKEN`
+> estiverem vazios, registrado como `ENTRYPOINT`. (8) `docker-compose.airflow.yml` não
+> expunha a flag de exigência de auth; adicionada `TRIAGE_REQUIRE_AUTH` ao bloco
+> `environment` com default `false`. (9) `tests/test_api_container.py` ainda exigia
+> `depends_on: api-prod` para `dashboard-dev`; reescrito o teste para refletir o
+> desacoplamento e exigir `profiles == ["dev"]` mais chave de API dedicada. (10)
+> `tests/test_repository_structure.py` ignorava os novos arquivos do Airflow; incluídos
+> `docker-compose.airflow.yml`, `airflow/Dockerfile` e `airflow/entrypoint.sh` na lista
+> de arquivos obrigatórios. Lint limpo, 152 testes verdes (149 anteriores + 3 ajustados
+> desta rodada: `test_api_container.py::test_front_containers_are_isolated_and_depend_on_healthy_api`,
+> `test_repository_structure.py::test_required_files_exist`, sem novos testes —
+> mudanças estruturais).
+
 ## Etapa 5 — Otimização do modelo (Bill)
 
 ### Otimização do classificador — Bill

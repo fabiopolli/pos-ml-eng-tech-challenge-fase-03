@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI()
 prediction_calls = 0
+EXPECTED_API_KEY = b"doc-e2e-key"
 
 
 class PredictIn(BaseModel):
@@ -21,7 +24,7 @@ def health() -> dict[str, object]:
 @app.post("/predict")
 def predict(payload: PredictIn, x_api_key: str | None = Header(default=None)) -> dict[str, object]:
     global prediction_calls
-    if x_api_key != "doc-e2e-key":
+    if x_api_key is None or not hmac.compare_digest(x_api_key.encode("utf-8"), EXPECTED_API_KEY):
         raise HTTPException(status_code=403, detail="forbidden")
     prediction_calls += 1
     return {

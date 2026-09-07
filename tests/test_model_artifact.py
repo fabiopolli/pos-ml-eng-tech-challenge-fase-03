@@ -256,9 +256,7 @@ def test_metadata_rejects_impossible_version_timestamp(
         validate_metadata(metadata)
 
 
-def test_metadata_rejects_std_macro_f1_above_one(
-    tmp_path: Path, tiny_pipeline: Pipeline
-) -> None:
+def test_metadata_rejects_std_macro_f1_above_one(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
     """``std_macro_f1`` must be bounded by 1 even if the recomputed value would
     otherwise satisfy ``math.isclose`` (defense in depth against sign errors in
     selection or tooling)."""

@@ -10,10 +10,14 @@ USER airflow
 COPY --chown=airflow:root pyproject.toml README.md /opt/triage-ml/
 COPY --chown=airflow:root src /opt/triage-ml/src
 COPY --chown=airflow:root configs /opt/triage-ml/configs
+COPY --chown=airflow:root airflow/entrypoint.sh /opt/triage-ml/entrypoint.sh
 
 ENV PYTHONPATH=/opt/triage-ml/src
 
-RUN pip install --no-cache-dir \
+RUN chmod +x /opt/triage-ml/entrypoint.sh \
+    && pip install --no-cache-dir \
     "matplotlib>=3.7" \
     "seaborn>=0.12" \
     --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.1.7/constraints-3.12.txt
+
+ENTRYPOINT ["/opt/triage-ml/entrypoint.sh"]

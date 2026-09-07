@@ -6,7 +6,7 @@ ENV UV_COMPILE_BYTECODE=1 \
 RUN pip install --no-cache-dir uv==0.11.23
 
 WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
+COPY pyproject.toml uv.lock README.md .python-version ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY src ./src

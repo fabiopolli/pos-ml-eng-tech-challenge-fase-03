@@ -16,6 +16,9 @@ def test_required_files_exist() -> None:
         ".github/workflows/ci.yml",
         "Dockerfile",
         "docker-compose.yml",
+        "docker-compose.airflow.yml",
+        "airflow/Dockerfile",
+        "airflow/entrypoint.sh",
     }
 
     missing = sorted(path for path in required if not (ROOT / path).is_file())
