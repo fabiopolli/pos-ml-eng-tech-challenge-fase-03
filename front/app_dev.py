@@ -328,7 +328,10 @@ def _render_model_sidebar(info: dict[str, Any]) -> None:
     metrics = info.get("metrics", {}) or {}
     per_class = metrics.get("per_class", {}) or {}
     with st.expander("Métricas", expanded=True):
-        overall = metrics.get("overall") or {
+        # ``metadata.json`` stores accuracy/balanced_accuracy/macro_f1/weighted_f1
+        # at the root of ``metrics`` (validated by ``validate_metadata``). Read
+        # them directly instead of probing a non-existent ``overall`` key.
+        overall = {
             "accuracy": metrics.get("accuracy"),
             "balanced_accuracy": metrics.get("balanced_accuracy"),
             "macro_f1": metrics.get("macro_f1"),
