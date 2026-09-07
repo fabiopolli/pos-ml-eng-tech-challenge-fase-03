@@ -260,6 +260,54 @@ validou 7.489 elegíveis e preparou 5.000; o artefato
 `balanced_accuracy=0.7281` e `macro_f1=0.7335`. Uma segunda execução terminou com
 sucesso e `reused=true`, confirmando a idempotência para os mesmos dataset e configuração.
 
+> Atualização 2026-09-07 (revisão cruzada da Etapa 7): Bill executou revisão estática
+> cruzada da Etapa 7 com cuidado redobrado (alto risco por execução de subprocessos
+> com credenciais, contrato de DAG e publicação atômica) e cross-validação com dois
+> sub-agentes. Os pontos consolidados foram aplicados: (1) `clone_environment =
+> os.environ.copy()` em `airflow_pipeline.py:61` herdava todo o ambiente do worker
+> Airflow — incluindo segredos — para o subprocess do `git`, deixando o token do
+> DagsHub em `/proc/<pid>/environ` e em qualquer subprocesso filho; substituído por
+> `_git_environment()` que monta um env mínimo com apenas `PATH`, `LC_ALL`,
+> `GIT_TERMINAL_PROMPT=0` e `GIT_ASKPASS_REQUIRE=force`, mais `GIT_ASKPASS`,
+> `DAGSHUB_USERNAME` e `DAGSHUB_USER_TOKEN` quando há credenciais. Após o clone, o
+> dict é limpo em memória (`""` em vez de remover, preservando a chave para testes
+> que inspecionam o env recebido pelo subprocesso). (2) `subprocess.run(..., check=True,
+> capture_output=True)` engolia o stderr do `git`; empacotado em `_run_git` que
+> sanitiza credenciais via `_redact_credentials` (regex
+> `(://)([^/\s:@]+):([^@\s/]+)@`) e re-raise como `RuntimeError` com mensagem útil
+> para branch inexistente, 401 ou falha TLS. (3) `GIT_TERMINAL_PROMPT=0` era
+> insuficiente — combinado com `GIT_ASKPASS_REQUIRE=force` que torna o helper
+> obrigatório. (4) `validate_dataset_file` hardcodava `sample_size=5_000` e
+> `random_state=42`, divergindo do `configs/training.yaml` consumido por
+> `run_training`; agora aceita `config_path` opcional e delega a `_load_preparation_settings`
+> que lê `sample_size`/`random_state` do YAML quando não fornecidos, com overrides
+> explícitos honrados. (5) `validate_dataset_file` retornava apenas 6 chaves e
+> descartava `missing_or_empty_rows`, `conflicting_texts`, `conflicting_rows` e
+> `duplicate_rows` do `PreparationReport`; agora retorna o conjunto completo para
+> visibilidade operacional. (6) `validate_dataset_file` carregava o CSV inteiro
+> sem limite; adicionada proteção contra OOM com `MAX_DATASET_BYTES = 200 MiB`
+> antes de `pd.read_csv`. (7) `find_reusable_artifact` capturava exceções
+> incompletas; tupla ampliada para `(OSError, ValueError, RuntimeError, KeyError,
+> TypeError, AttributeError)`. (8) `find_reusable_artifact` aceitava qualquer
+> subdiretório com `airflow_run.json` (inclusive `models/.trash/...`) sem checar o
+> `VERSION_PATTERN`; agora filtra `re.fullmatch(VERSION_PATTERN, manifest_path.parent.name)`
+> e pula manifestos maiores que `MAX_MANIFEST_BYTES = 1 MiB`. (9)
+> `train_evaluate_persist` escrevia `airflow_run.json` com `Path.write_text`, sem
+> atomicidade; substituído por `_atomic_write_json` (tempfile + `os.replace`). (10)
+> `ingest_from_git` aceitava destino através de symlink na hierarquia, criando
+> potencial escape via `mkdir(parents=True)`; `_ensure_no_symlink_ancestor` recusa
+> a publicação com erro explícito. (11) `airflow/dags/triage_retraining.py` usava
+> `os.environ["DATA_REPOSITORY_URL"]` (KeyError sem mensagem) e `os.getenv(...)
+> or None` mascarando credenciais vazias; substituído por `_require_env` (mensagem
+> amigável) e `_require_auth_credentials` que valida `TRIAGE_REQUIRE_AUTH=true`
+> exige `DAGSHUB_USERNAME`/`DAGSHUB_USER_TOKEN` preenchidos — espelhando a checagem
+> do `entrypoint.sh` dentro do DAG Python, eliminando bypass quando o DAG roda fora
+> do compose. (12) DAG movido para fora do escopo das tasks: leitura única de
+> `TRIAGE_*` no escopo do `@dag` factory, garantindo avaliação única na construção
+> da DAG. Testes adicionados: `test_git_subprocess_errors_redact_credentials_in_stderr`,
+> `test_ingestion_refuses_destination_through_symlink`, `test_validate_dataset_file_aligns_with_training_config`.
+> Lint limpo, 155 testes verdes (152 anteriores + 3 novos desta rodada).
+
 ## Etapa 8 — Cloud, vídeo e documentação final
 
 ### Documentação — Fábio

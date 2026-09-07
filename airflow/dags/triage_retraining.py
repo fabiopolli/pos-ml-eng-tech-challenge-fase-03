@@ -15,6 +15,25 @@ from triage_ml.orchestration.airflow_pipeline import (
 )
 
 
+def _require_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise ValueError(f"required environment variable is missing or empty: {name}")
+    return value
+
+
+def _require_auth_credentials() -> tuple[str, str]:
+    if os.environ.get("TRIAGE_REQUIRE_AUTH", "false").lower() != "true":
+        return "", ""
+    username = os.environ.get("DAGSHUB_USERNAME")
+    token = os.environ.get("DAGSHUB_USER_TOKEN")
+    if not username or not token:
+        raise ValueError(
+            "TRIAGE_REQUIRE_AUTH=true requires DAGSHUB_USERNAME and DAGSHUB_USER_TOKEN"
+        )
+    return username, token
+
+
 @dag(
     dag_id="triage_ml_retraining",
     description="Ingest, validate, train, evaluate and persist the triage model",
@@ -26,20 +45,29 @@ from triage_ml.orchestration.airflow_pipeline import (
     tags=["ml", "retraining", "triage"],
 )
 def triage_ml_retraining():
+    repository_url = _require_env("DATA_REPOSITORY_URL")
+    branch = os.environ.get("DATA_REPOSITORY_BRANCH", "main")
+    dataset_relative_path = os.environ.get("DATASET_RELATIVE_PATH", "data/medical_tc_train.csv")
+    raw_csv_path = os.environ.get("TRIAGE_RAW_CSV", "/opt/triage-ml/data/medical_tc_train.csv")
+    config_path = os.environ.get("TRIAGE_TRAINING_CONFIG", "/opt/triage-ml/configs/training.yaml")
+    models_dir = os.environ.get("TRIAGE_MODELS_DIR", "/opt/triage-ml/models")
+    figures_dir = os.environ.get("TRIAGE_REPORTS_DIR", "/opt/triage-ml/reports/figures")
+    require_auth_user, require_auth_token = _require_auth_credentials()
+
     @task(execution_timeout=timedelta(minutes=10))
     def ingest() -> dict:
         return ingest_from_git(
-            repository_url=os.environ["DATA_REPOSITORY_URL"],
-            branch=os.getenv("DATA_REPOSITORY_BRANCH", "main"),
-            dataset_relative_path=os.getenv("DATASET_RELATIVE_PATH", "data/medical_tc_train.csv"),
-            destination=os.getenv("TRIAGE_RAW_CSV", "/opt/triage-ml/data/medical_tc_train.csv"),
-            git_username=os.getenv("DAGSHUB_USERNAME") or None,
-            git_token=os.getenv("DAGSHUB_USER_TOKEN") or None,
+            repository_url=repository_url,
+            branch=branch,
+            dataset_relative_path=dataset_relative_path,
+            destination=raw_csv_path,
+            git_username=require_auth_user or None,
+            git_token=require_auth_token or None,
         )
 
     @task(execution_timeout=timedelta(minutes=10))
     def validate(ingestion: dict) -> dict:
-        result = validate_dataset_file(ingestion["dataset_path"])
+        result = validate_dataset_file(ingestion["dataset_path"], config_path=config_path)
         if result["dataset_sha256"] != ingestion["dataset_sha256"]:
             raise ValueError("dataset changed between ingestion and validation")
         return {**ingestion, **result}
@@ -48,12 +76,9 @@ def triage_ml_retraining():
     def train(validated: dict) -> dict:
         return train_evaluate_persist(
             dataset_path=validated["dataset_path"],
-            models_dir=os.getenv("TRIAGE_MODELS_DIR", "/opt/triage-ml/models"),
-            figures_dir=os.getenv("TRIAGE_REPORTS_DIR", "/opt/triage-ml/reports/figures"),
-            config_path=os.getenv(
-                "TRIAGE_TRAINING_CONFIG",
-                "/opt/triage-ml/configs/training.yaml",
-            ),
+            models_dir=models_dir,
+            figures_dir=figures_dir,
+            config_path=config_path,
             source_commit=validated["source_commit"],
         )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -14,8 +15,12 @@ from typing import Any
 import pandas as pd
 
 from triage_ml.data.prepare import prepare_dataset
-from triage_ml.models.artifact import validate_artifact_bundle
-from triage_ml.models.train import run_training
+from triage_ml.models.artifact import VERSION_PATTERN, validate_artifact_bundle
+from triage_ml.models.train import load_config, run_training
+
+MAX_DATASET_BYTES = 200 * 1024 * 1024
+MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+_CREDENTIAL_PATTERN = re.compile(r"(://)([^/\s:@]+):([^@\s/]+)@")
 
 
 def file_sha256(path: str | Path) -> str:
@@ -33,6 +38,62 @@ def _safe_relative_path(value: str) -> PurePosixPath:
     if relative.is_absolute() or ".." in relative.parts or not relative.parts:
         raise ValueError("dataset_relative_path must be a safe repository-relative path")
     return relative
+
+
+def _redact_credentials(text: str) -> str:
+    """Strip accidental ``user:token@host`` segments from command stderr/stdout."""
+
+    return _CREDENTIAL_PATTERN.sub(r"\1[REDACTED]@", text)
+
+
+def _ensure_no_symlink_ancestor(path: Path) -> None:
+    """Refuse to write through any symlink in the path's ancestry."""
+
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            raise RuntimeError(f"refusing to operate through symlink: {ancestor}")
+
+
+def _git_environment(
+    askpass: Path | None, *, username: str | None, token: str | None
+) -> dict[str, str]:
+    """Build the minimal environment for the git subprocess (no inherited secrets)."""
+
+    environment: dict[str, str] = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "LC_ALL": "C.UTF-8",
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_ASKPASS_REQUIRE": "force",
+    }
+    if askpass is not None and username and token:
+        environment["GIT_ASKPASS"] = str(askpass)
+        environment["DAGSHUB_USERNAME"] = username
+        environment["DAGSHUB_USER_TOKEN"] = token
+    return environment
+
+
+def _run_git(
+    command: list[str],
+    *,
+    environment: dict[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=environment,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = _redact_credentials(exc.stderr or "")
+        stdout = _redact_credentials(exc.stdout or "")
+        raise RuntimeError(
+            f"git command failed (exit {exc.returncode}): {' '.join(command[:4])}... "
+            f"stderr={stderr.strip()} stdout={stdout.strip()}"
+        ) from exc
 
 
 def ingest_from_git(
@@ -54,65 +115,63 @@ def ingest_from_git(
         raise ValueError("git_username and git_token must be provided together")
     relative = _safe_relative_path(dataset_relative_path)
     destination = Path(destination)
+    _ensure_no_symlink_ancestor(destination.parent)
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="triage-airflow-ingest-") as temp_dir:
         checkout = Path(temp_dir) / "source"
-        clone_environment = os.environ.copy()
-        clone_environment["GIT_TERMINAL_PROMPT"] = "0"
+        askpass: Path | None = None
         if git_username and git_token:
             askpass = Path(temp_dir) / "git-askpass.sh"
             askpass.write_text(
                 "#!/bin/sh\n"
+                "set -eu\n"
                 'case "$1" in\n'
-                "  *Username*) printf '%s\\n' \"$DAGSHUB_USERNAME\" ;;\n"
-                "  *Password*) printf '%s\\n' \"$DAGSHUB_USER_TOKEN\" ;;\n"
+                '  *Username*) printf "%s\\n" "$DAGSHUB_USERNAME" ;;\n'
+                '  *Password*) printf "%s\\n" "$DAGSHUB_USER_TOKEN" ;;\n'
+                "  *) exit 1 ;;\n"
                 "esac\n",
                 encoding="utf-8",
             )
             askpass.chmod(0o700)
-            clone_environment.update(
-                {
-                    "GIT_ASKPASS": str(askpass),
-                    "DAGSHUB_USERNAME": git_username,
-                    "DAGSHUB_USER_TOKEN": git_token,
-                }
-            )
-        subprocess.run(
-            [
-                "git",
-                "clone",
-                "--quiet",
-                "--depth",
-                "1",
-                "--single-branch",
-                "--branch",
-                branch,
-                repository_url,
-                str(checkout),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            env=clone_environment,
-        )
-        source = checkout.joinpath(*relative.parts)
-        if not source.is_file():
-            raise FileNotFoundError(f"dataset not found in repository: {relative}")
-        commit = subprocess.run(
-            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        ).stdout.strip()
-        staged = destination.with_name(f".{destination.name}.tmp")
+        clone_environment = _git_environment(askpass, username=git_username, token=git_token)
         try:
-            shutil.copyfile(source, staged)
-            os.replace(staged, destination)
+            _run_git(
+                [
+                    "git",
+                    "clone",
+                    "--quiet",
+                    "--depth",
+                    "1",
+                    "--single-branch",
+                    "--branch",
+                    branch,
+                    repository_url,
+                    str(checkout),
+                ],
+                environment=clone_environment,
+                timeout=300,
+            )
+            source = checkout.joinpath(*relative.parts)
+            if not source.is_file():
+                raise FileNotFoundError(f"dataset not found in repository: {relative}")
+            commit = _run_git(
+                ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                environment=clone_environment,
+                timeout=30,
+            ).stdout.strip()
+            staged = destination.with_name(f".{destination.name}.tmp")
+            try:
+                shutil.copyfile(source, staged)
+                os.replace(staged, destination)
+            finally:
+                staged.unlink(missing_ok=True)
         finally:
-            staged.unlink(missing_ok=True)
+            # Wipe the in-memory copy so the token does not linger after the
+            # subprocess exits. The subprocess already received its own copy
+            # of the value when ``env=`` was evaluated.
+            clone_environment["DAGSHUB_USER_TOKEN"] = ""
+            clone_environment["DAGSHUB_USERNAME"] = ""
 
     return {
         "dataset_path": str(destination),
@@ -122,20 +181,56 @@ def ingest_from_git(
     }
 
 
+def _load_preparation_settings(
+    config_path: str | Path, *, sample_size: int | None, random_state: int | None
+) -> tuple[int, int]:
+    """Resolve (sample_size, random_state) preferring explicit overrides over the YAML."""
+
+    if sample_size is None or random_state is None:
+        config = load_config(Path(config_path))
+        if sample_size is None:
+            sample_size = int(config.get("sample_size", 5000))
+        if random_state is None:
+            random_state = int(config.get("random_state", 42))
+    return sample_size, random_state
+
+
 def validate_dataset_file(
-    dataset_path: str | Path, *, sample_size: int = 5_000, random_state: int = 42
+    dataset_path: str | Path,
+    *,
+    config_path: str | Path | None = None,
+    sample_size: int | None = None,
+    random_state: int | None = None,
 ) -> dict[str, Any]:
     """Validate the canonical data contract and return only non-sensitive metadata."""
 
     dataset_path = Path(dataset_path)
+    size = dataset_path.stat().st_size
+    if size > MAX_DATASET_BYTES:
+        raise ValueError(
+            f"dataset exceeds {MAX_DATASET_BYTES} bytes limit; refusing to load into memory"
+        )
+    if config_path is not None:
+        sample_size, random_state = _load_preparation_settings(
+            config_path, sample_size=sample_size, random_state=random_state
+        )
+    else:
+        sample_size = sample_size or 5_000
+        random_state = random_state if random_state is not None else 42
     raw = pd.read_csv(dataset_path)
     prepared, report = prepare_dataset(raw, sample_size=sample_size, random_state=random_state)
     return {
         "dataset_path": str(dataset_path),
         "dataset_sha256": file_sha256(dataset_path),
         "input_rows": report.input_rows,
+        "missing_or_empty_rows": report.missing_or_empty_rows,
+        "conflicting_texts": report.conflicting_texts,
+        "conflicting_rows": report.conflicting_rows,
+        "duplicate_rows": report.duplicate_rows,
         "eligible_rows": report.eligible_rows,
         "prepared_rows": len(prepared),
+        "sample_size": sample_size,
+        "random_state": random_state,
         "classes": sorted(int(value) for value in prepared["target"].unique()),
     }
 
@@ -146,6 +241,10 @@ def find_reusable_artifact(
     """Find a prior successful orchestration run with identical declared inputs."""
 
     for manifest_path in sorted(Path(models_dir).glob("*/airflow_run.json"), reverse=True):
+        if not VERSION_PATTERN.fullmatch(manifest_path.parent.name):
+            continue
+        if manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+            continue
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (
@@ -160,9 +259,21 @@ def find_reusable_artifact(
                     "joblib": str(joblib_path),
                     "metrics": metadata["metrics"],
                 }
-        except (OSError, ValueError, RuntimeError, KeyError):
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError):
             continue
     return None
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True))
+        os.replace(tmp_name, path)
+    except Exception:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def train_evaluate_persist(
@@ -197,9 +308,7 @@ def train_evaluate_persist(
         "config_file_sha256": config_hash,
         "source_commit": source_commit,
     }
-    (version_dir / "airflow_run.json").write_text(
-        json.dumps(run_manifest, indent=2, sort_keys=True), encoding="utf-8"
-    )
+    _atomic_write_json(version_dir / "airflow_run.json", run_manifest)
     return {
         "reused": False,
         "model_version": summary["model_version"],
