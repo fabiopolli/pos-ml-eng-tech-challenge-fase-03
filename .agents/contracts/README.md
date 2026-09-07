@@ -6,7 +6,7 @@ Estes contratos iniciais permitem trabalho paralelo. Alterações incompatíveis
 
 - entrada tabular pública, com origem e licença documentadas;
 - 2.000 a 5.000 registros no recorte do projeto;
-- schema canônico processado: `text: string`, `target: string|int`;
+- schema canônico processado: `text: string`, `target: int ∈ {1, 2, 3, 4, 5}` mapeando para as cinco categorias clínicas do Medical Abstracts TC Corpus (Neoplasms, Digestive system diseases, Nervous system diseases, Cardiovascular diseases, General pathological conditions). Labels fora dessa faixa são rejeitados em `triage_ml.data.prepare` (`VALID_TARGETS = frozenset(range(1, 6))`);
 - splits reproduzíveis e sem vazamento;
 - dados brutos/processados fora do Git.
 

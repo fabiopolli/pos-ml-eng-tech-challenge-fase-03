@@ -45,7 +45,11 @@ O processamento converte o schema original para o contrato canônico:
 | Original | Canônico | Tipo |
 |---|---|---|
 | `medical_abstract` | `text` | string |
-| `condition_label` | `target` | inteiro |
+| `condition_label` | `target` | inteiro em `{1, 2, 3, 4, 5}` |
+
+A faixa `target ∈ {1, 2, 3, 4, 5}` é parte do contrato e é validada por
+`triage_ml.data.prepare` (constante `VALID_TARGETS = frozenset(range(1, 6))`).
+Labels fora desse conjunto são rejeitados com `ValueError`.
 
 Os labels são categorias clínicas, não níveis ordenados de gravidade:
 
