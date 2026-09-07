@@ -81,3 +81,32 @@ def test_pipeline_end_to_end_on_tiny_corpus() -> None:
 
 def test_valid_classifiers_constant() -> None:
     assert set(VALID_CLASSIFIERS) == {"logreg", "linear_svc"}
+
+
+def test_models_package_reexports_artifact_helpers() -> None:
+    """Stable artifact symbols should be reachable from the package root.
+
+    Downstream consumers (the dev API, the DAG, the dashboard helpers) should
+    not need to know which submodule owns each helper.
+    """
+
+    import triage_ml.models as models_pkg
+
+    expected = {
+        "ArtifactCompatibilityError",
+        "ArtifactIntegrityError",
+        "ArtifactPaths",
+        "DEFAULT_LINEAR_SVC",
+        "DEFAULT_LOGREG",
+        "DEFAULT_TFIDF",
+        "VALID_CLASSIFIERS",
+        "build_classifier",
+        "build_metadata",
+        "build_pipeline",
+        "load_artifact",
+        "validate_artifact_bundle",
+        "validate_metadata",
+    }
+    assert expected.issubset(set(models_pkg.__all__))
+    for name in expected:
+        assert hasattr(models_pkg, name), f"triage_ml.models missing {name!r}"
