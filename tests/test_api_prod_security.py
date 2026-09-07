@@ -104,6 +104,13 @@ def test_settings_reject_unknown_values() -> None:
         make_settings(unexpected_option="not allowed")
 
 
+def test_settings_reject_duplicate_api_keys() -> None:
+    """Reusing the same value across roles would silently collapse role checks."""
+
+    with pytest.raises(ValidationError, match="must be distinct"):
+        make_settings(api_key_service=DOCTOR_KEY, api_key_doctor=DOCTOR_KEY)
+
+
 def test_settings_accepts_explicit_valid_values() -> None:
     settings = make_settings(ratelimit_predict="2/minute")
 
@@ -253,6 +260,59 @@ def test_health_reports_loaded_model(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.status_code == 200
     assert response.json()["model_loaded"] is True
+
+
+def test_health_returns_503_when_model_is_not_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Lifespan did not load the model: /health must surface 503."""
+
+    monkeypatch.setattr("triage_ml.api.app.detect_language", lambda *args, **kwargs: None)
+    settings = make_settings()
+    holder = DummyHolder.__new__(DummyHolder)
+    holder.pipeline = None
+    holder.metadata = {"language": "en"}
+    holder.label_names = {}
+    holder.model_version = None
+    holder.registry_root = "."
+    holder.load = lambda: None  # type: ignore[method-assign]
+    app = create_app(holder=holder, settings=settings)
+    app.dependency_overrides[get_settings] = lambda: settings
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["model_loaded"] is False
+
+
+def test_prod_lifespan_blocks_when_languages_differ(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A prod deployment with mismatched language config must abort startup."""
+
+    from triage_ml.api import app as api_app
+    from triage_ml.dev_api import config as dev_api_config
+
+    class PtHolder(DummyHolder):
+        @property
+        def loaded(self) -> bool:
+            return True
+
+    holder = PtHolder()
+    holder.metadata = {"language": "pt"}
+    dev_api_config.reset_api_config_cache()
+    monkeypatch.setattr(
+        dev_api_config,
+        "load_api_config",
+        lambda path=None: dev_api_config.ApiConfig(supported_languages=frozenset({"en"})),
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="supported languages"):
+            with TestClient(create_app(holder=holder, settings=make_settings())):
+                pass
+    finally:
+        dev_api_config.reset_api_config_cache()
 
 
 def test_model_info_requires_authentication(monkeypatch: pytest.MonkeyPatch) -> None:

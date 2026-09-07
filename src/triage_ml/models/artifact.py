@@ -18,6 +18,8 @@ from typing import Any
 SCHEMA_VERSION = 1
 VERSION_PATTERN = re.compile(r"^\d{8}T\d{6}Z-[0-9a-f]{12}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SUPPORTED_TASK_TYPES: frozenset[str] = frozenset({"multiclass_text_classification"})
+SUPPORTED_LANGUAGES: frozenset[str] = frozenset({"en"})
 FINGERPRINT_KEYS = {
     "raw_csv_sha256",
     "prepared_dataset_sha256",
@@ -93,10 +95,33 @@ def file_sha256(path: Path) -> str:
 
 def write_classes(path: Path, classes: Iterable[Any]) -> list[Any]:
     class_list = [_coerce(value) for value in classes]
-    path.write_text(
-        json.dumps(class_list, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
-    )
+    _atomic_write_json(path, class_list)
     return class_list
+
+
+def _atomic_write_json(path: Path, payload: object) -> None:
+    """Write ``payload`` to ``path`` atomically using a sibling temp file.
+
+    The previous ``Path.write_text`` was non-atomic: a crash mid-write left
+    ``metadata.json`` (or ``classes.json``) in a corrupt state and the
+    artifact loader would refuse to load the directory afterwards. Use a
+    ``tempfile.mkstemp`` in the same directory plus ``os.replace`` so the
+    rename is atomic on the same filesystem.
+    """
+
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_no_symlink_ancestor(path)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, ensure_ascii=False, allow_nan=False))
+        os.replace(tmp_name, path)
+    except Exception:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def read_classes(path: Path) -> list[Any]:
@@ -160,10 +185,7 @@ def build_metadata(
 
 def write_metadata(path: Path, metadata: dict[str, Any]) -> None:
     validate_metadata(metadata)
-    path.write_text(
-        json.dumps(_coerce(metadata), indent=2, ensure_ascii=False, allow_nan=False),
-        encoding="utf-8",
-    )
+    _atomic_write_json(path, _coerce(metadata))
 
 
 def _coerce(obj: Any) -> Any:
@@ -212,8 +234,15 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
     for key in ("model_name", "task_type", "language"):
         if not isinstance(metadata[key], str) or not metadata[key].strip():
             raise ValueError(f"metadata.{key} must be a non-empty string")
-    if metadata["task_type"] != "multiclass_text_classification" or metadata["language"] != "en":
-        raise ValueError("metadata task_type or language is unsupported")
+    if (
+        metadata["task_type"] not in SUPPORTED_TASK_TYPES
+        or metadata["language"] not in SUPPORTED_LANGUAGES
+    ):
+        raise ValueError(
+            "metadata task_type or language is unsupported "
+            f"(task_type must be one of {sorted(SUPPORTED_TASK_TYPES)}, "
+            f"language must be one of {sorted(SUPPORTED_LANGUAGES)})"
+        )
 
     classes = metadata["classes"]
     if (
@@ -376,6 +405,21 @@ def verify_artifact_integrity(*, joblib_path: Path, metadata: dict[str, Any]) ->
         )
 
 
+def ensure_no_symlink_ancestor(path: Path) -> None:
+    """Reject writes/reads through any symlink in the path's ancestry.
+
+    A symlink anywhere in the chain (``models`` -> ``/srv/external``,
+    ``models/2025 -> /tmp/foo``) lets an attacker with write access to
+    the symlink target steer the loader into arbitrary directories. The
+    per-file ``is_symlink`` check only covers the leaf, so we walk the
+    ancestry explicitly.
+    """
+
+    for ancestor in (path, *path.parents):
+        if ancestor.is_symlink():
+            raise ArtifactCompatibilityError(f"refusing to operate through symlink: {ancestor}")
+
+
 def validate_artifact_bundle(joblib_path: str | Path) -> dict[str, Any]:
     """Validate a trusted local artifact without deserializing its joblib payload."""
 
@@ -387,6 +431,11 @@ def validate_artifact_bundle(joblib_path: str | Path) -> dict[str, Any]:
     joblib_path = Path(joblib_path)
     metadata_path = joblib_path.with_name("metadata.json")
     classes_path = joblib_path.with_name("classes.json")
+    # Refuse symlinks at any depth: a hostile operator could plant a
+    # symlink in models/<ver> or any parent directory to redirect the
+    # loader to an unrelated filesystem location.
+    for path in (joblib_path, metadata_path, classes_path):
+        ensure_no_symlink_ancestor(path)
     if (
         joblib_path.parent.is_symlink()
         or joblib_path.is_symlink()

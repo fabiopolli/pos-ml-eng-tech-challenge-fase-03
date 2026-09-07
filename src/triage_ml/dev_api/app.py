@@ -42,6 +42,7 @@ from triage_ml.dev_api.schemas import (
     ReloadOut,
 )
 from triage_ml.models.artifact import (
+    ensure_no_symlink_ancestor,
     load_artifact,
     validate_artifact_bundle,
     validate_model_version,
@@ -94,8 +95,10 @@ def _validated_model_path(models_dir: Path, version: str) -> Path:
         validate_model_version(version)
     except ValueError as exc:
         raise FileNotFoundError(f"unknown model version: {version!r}") from exc
+    ensure_no_symlink_ancestor(models_dir)
     root = models_dir.resolve()
     version_dir = models_dir / version
+    ensure_no_symlink_ancestor(version_dir)
     joblib_path = version_dir / "model.joblib"
     metadata_path = version_dir / "metadata.json"
     if (
@@ -205,6 +208,21 @@ def _request_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _assert_language_consistency(holder: ModelHolder) -> None:
+    """Refuse to start when the API config disagrees with the model manifest.
+
+    Centralised here so both the dev API and the production API apply the
+    same gate; otherwise a production deployment could ship an English-
+    only detector while serving a Portuguese artifact and silently produce
+    nonsense predictions for ``unsupported_language`` inputs.
+    """
+
+    api_config = get_api_config()
+    _, metadata, _, _ = holder.snapshot()
+    if metadata and api_config.supported_languages != {metadata["language"]}:
+        raise RuntimeError("API supported languages must match the loaded model language")
+
+
 def create_app(
     *,
     model_path: str | Path | None = None,
@@ -219,10 +237,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         holder.load()
-        api_config = get_api_config()
-        _, metadata, _, _ = holder.snapshot()
-        if metadata and api_config.supported_languages != {metadata["language"]}:
-            raise RuntimeError("API supported languages must match the loaded model language")
+        _assert_language_consistency(holder)
         yield
 
     app = FastAPI(title="triage_ml dev API", lifespan=lifespan)
@@ -302,11 +317,20 @@ def create_app(
     async def health() -> HealthOut:
         pipeline, _, _, model_version = holder.snapshot()
         model_loaded = pipeline is not None
-        return HealthOut(
+        body = HealthOut(
             status="ok" if model_loaded else "degraded",
             model_version=model_version,
             model_loaded=model_loaded,
         )
+        if not model_loaded:
+            # Mirror the production API: report 503 while the artifact is
+            # still loading so healthchecks do not route traffic to a pod
+            # that will reject every prediction with 503 anyway.
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=body.model_dump(),
+            )
+        return body
 
     @app.get("/models", response_model=ModelsListOut)
     def list_models() -> ModelsListOut:
@@ -339,7 +363,30 @@ def create_app(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="model_not_ready",
             )
-        return ModelInfoOut(**metadata)
+        # Whitelist the public fields instead of ``**metadata``: the
+        # manifest also carries ``schema_version``, ``fingerprints`` and
+        # ``checksum_sha256`` (the latter being a low-entropy hash of the
+        # joblib). ``ModelInfoOut`` is configured with ``extra="forbid"``
+        # so the previous ``**metadata`` spread would either leak them or
+        # 500 on the next schema bump.
+        return ModelInfoOut(
+            model_version=metadata["model_version"],
+            model_name=metadata["model_name"],
+            task_type=metadata["task_type"],
+            language=metadata["language"],
+            classes=metadata["classes"],
+            label_mapping=metadata["label_mapping"],
+            random_state=metadata["random_state"],
+            n_train=metadata["n_train"],
+            n_test=metadata["n_test"],
+            metrics=metadata["metrics"],
+            preprocessing=metadata["preprocessing"],
+            selection=metadata["selection"],
+            dependency_versions=metadata["dependency_versions"],
+            git_commit=metadata["git_commit"],
+            git_dirty=metadata["git_dirty"],
+            created_at=metadata["created_at"],
+        )
 
     @app.post("/reload", response_model=ReloadOut)
     def reload_model(payload: ReloadIn) -> ReloadOut:
@@ -386,11 +433,11 @@ def create_app(
             )
 
         text = payload.text
-        if not text:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="validation_failed",
-            )
+        # ``PredictIn`` enforces ``strip_whitespace=True`` plus
+        # ``min_length=1`` and ``max_length=20000`` in schemas.py, so
+        # ``text`` is guaranteed to be a non-empty, non-whitespace string
+        # at this point. The previous ``if not text`` short-circuit was
+        # unreachable.
 
         api_config = get_api_config()
         if api_config.supported_languages != {metadata["language"]}:

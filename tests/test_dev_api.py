@@ -318,6 +318,49 @@ def test_model_info_returns_503_when_artifact_missing(tmp_path: Path) -> None:
     assert "could not be processed" in body["message"].lower()
 
 
+def test_health_returns_503_when_model_is_not_loaded(tmp_path: Path) -> None:
+    """``/health`` must surface degraded state via the HTTP status code.
+
+    Previously the handler always returned HTTP 200 with ``status="degraded"``,
+    letting orchestrators route traffic to a container that would reject
+    every ``/predict`` call with 503 anyway.
+    """
+
+    holder = ModelHolder(tmp_path)
+    app = create_app(holder=holder)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["model_loaded"] is False
+
+
+def test_dev_api_lifespan_blocks_when_languages_differ(tmp_path: Path, monkeypatch) -> None:
+    """Loading an ``en`` model under a ``pt``-only API config must abort startup."""
+
+    from triage_ml.dev_api import config as dev_api_config
+
+    holder = ModelHolder(_artifact(tmp_path))
+    # ``get_api_config`` is ``lru_cache``d on the production loader; drop it
+    # *before* patching so the patched loader wins, then drop it again
+    # afterwards so we don't leak the Portuguese config to later tests.
+    dev_api_config.reset_api_config_cache()
+    monkeypatch.setattr(
+        dev_api_config,
+        "load_api_config",
+        lambda path=None: dev_api_config.ApiConfig(supported_languages=frozenset({"pt"})),
+    )
+    try:
+        with pytest.raises(RuntimeError, match="supported languages"):
+            with TestClient(create_app(holder=holder), raise_server_exceptions=False):
+                pass
+    finally:
+        dev_api_config.reset_api_config_cache()
+
+
 # ---------------------------------------------------------------------------
 # Model picker (``GET /models`` + ``POST /reload``)
 # ---------------------------------------------------------------------------

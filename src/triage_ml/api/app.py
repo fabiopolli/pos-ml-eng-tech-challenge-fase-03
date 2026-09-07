@@ -28,6 +28,7 @@ from triage_ml.api.settings import Settings, get_settings
 from triage_ml.dev_api.app import (
     ALLOWED_ERROR_CODES,
     ModelHolder,
+    _assert_language_consistency,
     _default_model_path,
     _list_model_versions,
 )
@@ -77,6 +78,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         holder.load()
+        _assert_language_consistency(holder)
         yield
 
     app = FastAPI(title="Triage ML - Prod API", lifespan=lifespan)
@@ -196,11 +198,18 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
     @app.get("/health", response_model=HealthOut)
     def health(request: Request):
         _, _, _, model_version = holder.snapshot()
-        return HealthOut(
+        body = HealthOut(
             status="ok" if holder.loaded else "degraded",
             model_version=model_version,
             model_loaded=holder.loaded,
         )
+        if not holder.loaded:
+            # Healthchecks must reflect readiness: an orchestrator routing
+            # traffic to a container that cannot serve predictions would
+            # amplify the failure. Returning 503 keeps Kubernetes/Compose
+            # from sending requests until the artifact is loaded.
+            return JSONResponse(status_code=503, content=body.model_dump())
+        return body
 
     @app.get("/model-info", response_model=ModelInfoOut)
     def model_info(request: Request, role: str = Depends(RequireRole(["service", "doctor"]))):
@@ -211,7 +220,24 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         pipeline, metadata, _, _ = holder.snapshot()
         if not pipeline:
             raise HTTPException(status_code=503, detail="model_not_ready")
-        return ModelInfoOut(**metadata)
+        return ModelInfoOut(
+            model_version=metadata["model_version"],
+            model_name=metadata["model_name"],
+            task_type=metadata["task_type"],
+            language=metadata["language"],
+            classes=metadata["classes"],
+            label_mapping=metadata["label_mapping"],
+            random_state=metadata["random_state"],
+            n_train=metadata["n_train"],
+            n_test=metadata["n_test"],
+            metrics=metadata["metrics"],
+            preprocessing=metadata["preprocessing"],
+            selection=metadata["selection"],
+            dependency_versions=metadata["dependency_versions"],
+            git_commit=metadata["git_commit"],
+            git_dirty=metadata["git_dirty"],
+            created_at=metadata["created_at"],
+        )
 
     @app.get("/models", response_model=ModelsListOut)
     def list_models(request: Request, role: str = Depends(RequireRole(["service", "doctor"]))):

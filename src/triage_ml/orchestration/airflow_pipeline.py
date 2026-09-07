@@ -265,6 +265,7 @@ def find_reusable_artifact(
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    _ensure_no_symlink_ancestor(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:

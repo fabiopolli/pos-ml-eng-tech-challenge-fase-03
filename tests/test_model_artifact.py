@@ -234,7 +234,7 @@ def test_load_artifact_rejects_symlinked_model(tmp_path: Path, tiny_pipeline: Pi
     real_joblib = paths.joblib.with_name("model-real.joblib")
     paths.joblib.rename(real_joblib)
     paths.joblib.symlink_to(real_joblib.name)
-    with pytest.raises(ArtifactCompatibilityError, match="symlinks"):
+    with pytest.raises(ArtifactCompatibilityError, match="refusing to operate through symlink"):
         load_artifact(paths.joblib)
 
 

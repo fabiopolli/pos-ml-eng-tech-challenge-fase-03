@@ -57,6 +57,7 @@ class PreprocessingOut(BaseModel):
 
 
 class ModelInfoOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     model_version: str
     model_name: str
     task_type: str
