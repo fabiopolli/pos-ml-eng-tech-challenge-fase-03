@@ -102,6 +102,8 @@ Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerent
 
 Aceite parcial (soma com Etapa 5 para fechar 20% do item oficial): modelo NLP funcional, otimização bem-sucedida e melhoria demonstrada. A otimização em si entra na Etapa 5.
 
+> Atualização 2026-09-07 (revisão cruzada da Etapa 2): Bill executou revisão estática da Etapa 2 e encontrou cinco pontos. (1) `front/app_dev.py` lia `metrics.get("overall")` no sidebar — chave que nunca existiu no manifesto; substituído por leitura direta das métricas no nível raiz de `metrics`. (2) `load_artifact` validava apenas `expected_params ⊆ actual_params`, sem detectar o caso simétrico (parâmetro declarado no manifesto mas ausente do `joblib`); adicionado erro `ArtifactCompatibilityError("missing declared parameter")` e teste novo. (3) `/predict` levantava `HTTPException(detail="language_config_incompatible")` mas o handler de Starlette caía no fallback `"request_failed"`, perdendo telemetria de drift de configuração; código adicionado ao `allowed_codes` e teste novo. (4) `validate_metadata` aceitava `std_macro_f1 > 1` (assimetria com `mean_macro_f1` que tem limite ≤1); adicionado limite superior simétrico e teste novo. (5) `triage_ml.models.__init__` só exportava `build_pipeline`, exigindo import paths longos; re-exportados `ArtifactCompatibilityError`, `ArtifactIntegrityError`, `ArtifactPaths`, `build_metadata`, `load_artifact`, `validate_artifact_bundle`, `validate_metadata`, `build_classifier`, `VALID_CLASSIFIERS`, `DEFAULT_TFIDF`, `DEFAULT_LOGREG`, `DEFAULT_LINEAR_SVC`. Lint limpo e 88 testes verdes (84 anteriores + 4 novos).
+
 ## Etapa 3 — API oficial servindo o modelo (Romário)
 
 ### API FastAPI — Romário
