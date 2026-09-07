@@ -301,6 +301,7 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
                 or not math.isfinite(value)
                 or value < 0
                 or (key == "mean_macro_f1" and value > 1)
+                or (key == "std_macro_f1" and value > 1)
             ):
                 raise ValueError(f"metadata candidate {key} is invalid")
         mean = math.fsum(fold_scores) / len(fold_scores)
@@ -475,8 +476,20 @@ def load_artifact(joblib_path: str | Path) -> tuple[Any, dict[str, Any]]:
         ),
     )
     for component, expected_params, actual_params in declared_params:
+        # ``expected_params`` carries only the hyperparameters the operator
+        # declared in ``configs/training.yaml`` and persisted into the
+        # manifest. ``actual_params`` returns the full sklearn default set
+        # plus those overrides, so a strict name-equality check is too
+        # strict (it would reject every artifact for carrying sklearn
+        # defaults). Reject drift only in the direction that matters for
+        # reproducibility: every declared hyperparameter must be present
+        # on the trained step with the same value.
         for name, expected_value in expected_params.items():
-            if name not in actual_params or _coerce(actual_params[name]) != _coerce(expected_value):
+            if name not in actual_params:
+                raise ArtifactCompatibilityError(
+                    f"model {component} is missing declared parameter {name!r}"
+                )
+            if _coerce(actual_params[name]) != _coerce(expected_value):
                 raise ArtifactCompatibilityError(
                     f"model {component} parameter {name!r} disagrees with metadata"
                 )

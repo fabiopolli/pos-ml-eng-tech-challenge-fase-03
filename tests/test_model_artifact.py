@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import platform
 from pathlib import Path
 from unittest.mock import patch
@@ -208,6 +209,26 @@ def test_load_artifact_rejects_declared_parameter_mismatch(
         load_artifact(paths.joblib)
 
 
+def test_load_artifact_rejects_declared_parameter_missing_from_model(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    """A hyperparameter declared in the manifest must exist on the trained step.
+
+    Catches the case where the manifest carries a parameter the trained
+    pipeline does not have (e.g. a new field added to ``configs/training.yaml``
+    without rebuilding the artifact).
+    """
+
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    metadata["preprocessing"]["classifier_params"]["unsupported_param"] = 1
+    # ``write_metadata`` re-validates against the static schema; the corruption
+    # here only matters for ``load_artifact``, so write the manifest directly.
+    paths.metadata.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ArtifactCompatibilityError, match="missing declared parameter"):
+        load_artifact(paths.joblib)
+
+
 def test_load_artifact_rejects_symlinked_model(tmp_path: Path, tiny_pipeline: Pipeline) -> None:
     paths = _write_artifact(tmp_path, tiny_pipeline)
     real_joblib = paths.joblib.with_name("model-real.joblib")
@@ -232,6 +253,28 @@ def test_metadata_rejects_impossible_version_timestamp(
     metadata["model_version"] = "20261340T256199Z-0123456789ab"
 
     with pytest.raises(ValueError, match="timestamp"):
+        validate_metadata(metadata)
+
+
+def test_metadata_rejects_std_macro_f1_above_one(
+    tmp_path: Path, tiny_pipeline: Pipeline
+) -> None:
+    """``std_macro_f1`` must be bounded by 1 even if the recomputed value would
+    otherwise satisfy ``math.isclose`` (defense in depth against sign errors in
+    selection or tooling)."""
+
+    paths = _write_artifact(tmp_path, tiny_pipeline)
+    metadata = read_metadata(paths.metadata)
+    candidate = metadata["selection"]["candidates"]["logreg"]
+    candidate["std_macro_f1"] = 1.5
+    # Keep fold_macro_f1 consistent with the recomputed std so the test fails
+    # for the right reason (upper bound) and not for std/mean disagreement.
+    candidate["fold_macro_f1"] = [0.0, 0.0]
+    candidate["mean_macro_f1"] = 0.0
+    # ``write_metadata`` re-validates, so write the corrupted manifest by
+    # hand to exercise ``validate_metadata`` itself.
+    paths.metadata.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="std_macro_f1 is invalid"):
         validate_metadata(metadata)
 
 
