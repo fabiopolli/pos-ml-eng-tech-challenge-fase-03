@@ -2,13 +2,13 @@
 
 | Campo | Valor |
 |---|---|
-| Integrante | Will (Bill) |
-| Etapa do checklist | Etapa 2 (baseline) — `docs/CHECKLIST.md` reordenado em 2026-08-23 |
-| Período desta entrega | 2026-08-23 (uma única sessão de trabalho) |
-| Última revisão | 2026-08-23 — robustez do detector de idioma, registry/reload, serialização atômica, dashboard e testes de regressão |
-| Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Fase 2 |
+| Integrante | Bill |
+| Etapa do checklist | Etapa 2 — Modelo baseline e serialização (`docs/CHECKLIST.md` reordenado em 2026-08-23) |
+| Período desta entrega | Sessões 2026-08-23 (baseline, serialização, dev API, dashboard) e 2026-09-07 (revisão cruzada de Bill) |
+| Última revisão | 2026-09-07 — endurecimento de `load_artifact` (drift reverso + limite de `std_macro_f1`), telemetria de `language_config_incompatible`, leitura direta de métricas no dashboard, re-exports estáveis em `triage_ml.models` |
+| Status | ✅ Baseline pronto, otimização e observabilidade ficam para a Etapa 5 |
 
-Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — Fase 3. O objetivo da Fase 1 é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma **API de desenvolvimento** (`src/triage_ml/dev_api/`) que outros integrantes (Romário, Denis, Fábio) possam consumir para validar localmente. A API de desenvolvimento **consome o modelo real treinado** — não é um stub. A API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará este contrato. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e no `PLAN-text-classifier.md` plus revisão do Codex em 2026-08-23.
+Este relatório cobre a Etapa 2 do classificador de texto do Tech Challenge — Fase 3. O objetivo é entregar um modelo NLP funcional, serializado segundo contrato e exposto por uma **API de desenvolvimento** (`src/triage_ml/dev_api/`) que outros integrantes (Romário, Denis, Fábio) possam consumir para validar localmente. A API de desenvolvimento **consome o modelo real treinado** — não é um stub. A API oficial de produção é trabalho do Romário (Etapa 3 do checklist) e herdará este contrato. As decisões foram registradas em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md) e revisadas em duas etapas: revisão inicial do Codex em 2026-08-23 e revisão cruzada de Bill em 2026-09-07.
 
 ## 1. Resumo executivo
 
@@ -16,23 +16,25 @@ Este relatório cobre a Fase 1 do classificador de texto do Tech Challenge — F
 - Métricas finais no split de teste (1000 amostras): **accuracy `0.7460`**, **balanced accuracy `0.7221`**, **macro-F1 `0.7296`**, **weighted-F1 `0.7438`**.
 - Pipeline serializado em diretório imutável `models/20260823T135811Z-bed2194376bc/` com `model.joblib`, `classes.json` e um manifesto `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
 - O artefato canônico registra `git_dirty=true`; as métricas continuam verificáveis localmente, mas uma promoção futura deve ser regenerada a partir de commit limpo para rastreabilidade exata.
-- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana). O endpoint `/reload` permite trocar o holder em runtime após re-validar manifesto + checksum (`ModelHolder.reload_to`); falhas preservam o modelo anterior.
-- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, configuração/política de idioma e helpers do dashboard: **80 testes verdes** em `uv run pytest`.
+- API de desenvolvimento (`src/triage_ml/dev_api/`) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict` consumindo o modelo real treinado, com `latency_ms`, `request_id` interno, `X-Request-ID` e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` já alinhados à Etapa 6 (Prometheus/Grafana). O endpoint `/reload` permite trocar o holder em runtime após re-validar manifesto + checksum (`ModelHolder.reload_to`); falhas preservam o modelo anterior. Os erros são sanitizados: o corpo nunca carrega o `text` original, e os códigos `unsupported_language`, `text_too_short_for_language_check`, `indeterminate_language`, `language_config_incompatible`, `validation_failed`, `prediction_failed`, `model_not_ready`, `model_not_found` e `model_incompatible` são preservados pelo handler de StarletteHTTPException (não colapsam em `request_failed`).
+- Suíte de testes cobre pipeline, serialização, integridade do artefato, validação de metadata, fluxo end-to-end de treino, contrato HTTP da API, configuração/política de idioma e helpers do dashboard: **88 testes verdes** em `uv run pytest` (84 antes da revisão cruzada + 4 novos: `test_load_artifact_rejects_declared_parameter_missing_from_model`, `test_metadata_rejects_std_macro_f1_above_one`, `test_language_config_incompatible_error_is_preserved_in_telemetry`, `test_models_package_reexports_artifact_helpers`).
 - Lint e formatação verdes (`ruff check .` / `ruff format --check .`).
 
 ## 2. Escopo e alinhamento com o plano
 
-A Fase 1 correspondeu às tarefas `F1.T1` a `F1.T6` de [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md), com a Etapa 2 do checklist marcando os itens abaixo como concluídos:
+A Etapa 2 correspondeu às tarefas `F1.T1` a `F1.T6` de [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md), com a Etapa 2 do checklist marcando os itens abaixo como concluídos:
 
 - [x] Baseline TF-IDF + classificador Scikit-Learn selecionado sem usar o test set.
 - [x] Seeds, preprocessing, fingerprints e versões fixas.
 - [x] Métricas por classe e agregadas, com figuras em `reports/figures/`.
 - [x] Modelo e metadados serializados segundo contrato e validados por checksum.
-- [x] API de desenvolvimento (`/health` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers.
+- [x] API de desenvolvimento (`/health` + `/model-info` + `/models` + `/reload` + `/predict`) em `src/triage_ml/dev_api/`, consumindo o artefato real treinado, com erros sanitizados, `latency_ms`, `request_id` e headers. `/reload` permite trocar o holder em runtime re-validando manifesto + checksum.
+- [x] Checagem de idioma na `/predict` via `langid` (allow-list `{"en"}`, rejeitando texto curto, score baixo e idioma não suportado, com `detected_language`/`detected_language_score` no body de erro).
+- [x] Dashboard de desenvolvimento `front/app_dev.py` (Streamlit) para exercitar `/health`, `/model-info`, `/models`, `/reload` e `/predict` manualmente, com cenários canônicos da política de idioma e model picker na sidebar.
 
-A Fase 2 (otimização ONNX, instrumentação Prometheus, Compose com API+Prometheus+Grafana, dashboard e teste de privacidade) **não está no escopo desta entrega** e foi explicitamente diferida.
+A Etapa 5 (otimização ONNX, instrumentação Prometheus, Compose com API+Prometheus+Grafana, dashboard e teste de privacidade) **não está no escopo desta entrega** e foi explicitamente diferida.
 
-### 2.1 Mudanças objetivas após a revisão do Codex (2026-08-23)
+### 2.1 Mudanças objetivas após a revisão inicial (Codex, 2026-08-23)
 
 | Tema | Antes da revisão | Depois da revisão |
 |---|---|---|
@@ -44,13 +46,24 @@ A Fase 2 (otimização ONNX, instrumentação Prometheus, Compose com API+Promet
 | `request_id` no header | ecoava `X-Request-ID` do cliente | sempre gerado internamente (cliente não controla o valor) |
 | Cabeçalho de timing | apenas `latency_ms` no body | `Server-Timing: predict;dur=<latency_ms>` |
 | `label_mapping` em runtime | lido de `data/medical_tc_labels.csv` | lido do `metadata.json` (sem CSV em runtime) |
-| `label_mapping` em runtime | — | removido: nomes das classes vêm só do manifesto |
 | Score de idioma | `exp(score bruto)` tratado como probabilidade | `LanguageIdentifier(norm_probs=True)`; probabilidade normalizada, não calibrada |
 | Publicação do artefato | diretório final criado antes de todos os arquivos | staging no mesmo filesystem + `rename` atômico ao final |
 | Model picker | listava qualquer diretório com nome válido | registry único; omite artefatos incompletos, inválidos e symlinks |
 | Reload concorrente | campos do holder atualizados separadamente | publicação sob lock e snapshot único por request |
 
 > O artefato legado em `models/v1/` não passa mais em `validate_metadata` e não é mais carregável. Todo novo treino cria uma versão nova.
+
+### 2.2 Mudanças após a revisão cruzada de Bill (2026-09-07)
+
+| Tema | Antes | Depois |
+|---|---|---|
+| `front/app_dev.py` — leitura de métricas | `metrics.get("overall") or {...}` (chave nunca existiu; ramo morto que dependia de fallback) | leitura direta de `accuracy/balanced_accuracy/macro_f1/weighted_f1` no nível raiz de `metrics` (validado por `validate_metadata`) |
+| `load_artifact` — drift reverso de hiperparâmetros | checava apenas `expected_params ⊆ actual_params` por valor (parâmetro declarado ausente no `joblib` passava silencioso) | `ArtifactCompatibilityError("model {component} is missing declared parameter {name!r}")` quando o manifesto declara um nome que o step não tem |
+| `validate_metadata` — `std_macro_f1` | aceita qualquer `value >= 0` finito (assimetria com `mean_macro_f1 <= 1`) | rejeita `value > 1` com `ValueError("metadata candidate std_macro_f1 is invalid")` |
+| `/predict` — telemetria de drift de configuração | `HTTPException(detail="language_config_incompatible")` colapsava em `error_code=request_failed` no handler de Starlette | `language_config_incompatible` adicionado a `allowed_codes` (preservado no body de erro) |
+| `triage_ml.models.__init__` — superfície pública | exportava apenas `build_pipeline` | re-exporta também `ArtifactCompatibilityError`, `ArtifactIntegrityError`, `ArtifactPaths`, `build_metadata`, `load_artifact`, `validate_artifact_bundle`, `validate_metadata`, `build_classifier`, `VALID_CLASSIFIERS`, `DEFAULT_TFIDF`, `DEFAULT_LOGREG`, `DEFAULT_LINEAR_SVC` |
+
+> Os cinco pontos foram cobertos por testes novos: `test_load_artifact_rejects_declared_parameter_missing_from_model`, `test_metadata_rejects_std_macro_f1_above_one`, `test_language_config_incompatible_error_is_preserved_in_telemetry` e `test_models_package_reexports_artifact_helpers`. As mudanças foram aplicadas nos commits `d6c8bd8`, `296f5a5`, `d2bb44f` e `3a4711d` da Etapa 2; a nota do checklist está em `docs/CHECKLIST.md` na linha subsequente à Etapa 2.
 
 ## 3. Pipeline e seleção
 
@@ -172,15 +185,16 @@ Topo (resumo):
 }
 ```
 
-`validate_metadata` em `artifact.py` aplica checagens estruturais: schema_version, formato da versão, inteiros únicos em `classes`, `label_mapping` cobre exatamente as classes, métricas em `[0, 1]`, `selection` consistente com `preprocessing`, dependências obrigatórias, git_commit como SHA-40 ou `"unknown"`, e regex de SHA-256 para cada fingerprint e para o checksum.
+`validate_metadata` em [`artifact.py`](../../src/triage_ml/models/artifact.py) aplica checagens estruturais: schema_version, formato da versão, inteiros únicos em `classes`, `label_mapping` cobre exatamente as classes, métricas em `[0, 1]`, `selection` consistente com `preprocessing`, dependências obrigatórias, git_commit como SHA-40 ou `"unknown"`, regex de SHA-256 para cada fingerprint e para o checksum, e — desde a revisão cruzada de 2026-09-07 — `mean_macro_f1 <= 1` e `std_macro_f1 <= 1` (rejeita valores fora da faixa simétrica `[0, 1]`).
 
 ### 4.3 Carregamento de artefato local confiável (`load_artifact`)
 
-`load_artifact(path)` em `triage_ml/models/artifact.py` aplica três camadas:
+[`load_artifact(path)`](../../src/triage_ml/models/artifact.py) aplica quatro camadas:
 
-1. Valida o manifesto (`validate_metadata`) e exige `model.joblib` + `metadata.json` no diretório.
+1. Valida o manifesto ([`validate_metadata`](../../src/triage_ml/models/artifact.py)) e exige `model.joblib` + `metadata.json` no diretório.
 2. Verifica o `checksum_sha256` do `joblib` com `hmac.compare_digest` (sem timing attacks).
 3. Rejeita symlinks, desserializa o pipeline e exige os passos `tfidf`/`clf`, tipos coerentes, parâmetros declarados compatíveis e `pipeline.classes_ == metadata.classes`. Se `classes.json` existir, exige também que ele combine com `metadata.classes`.
+4. **Desde 2026-09-07**: rejeita drift no manifesto quando um nome declarado em `metadata.preprocessing.{tfidf,classifier_params}` não existe no step do sklearn (`ArtifactCompatibilityError("model {component} is missing declared parameter {name!r}")`). Antes desse check, um YAML que adicionasse um hiperparâmetro sem reconstruir o artefato passava silenciosamente — o manifesto não refletia mais a configuração efetiva de treino.
 
 Falhas levantam `ArtifactIntegrityError` ou `ArtifactCompatibilityError`. A API aborta o startup com `RuntimeError` se isso falhar. O checksum detecta corrupção/mismatch, mas não autentica origem; por isso o loader continua restrito a artefatos locais confiáveis.
 
@@ -192,7 +206,7 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
 
 ### 5.1 Comportamento
 
-`src/triage_ml/dev_api/app.py` expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict`. A API consome o artefato real treinado em `models/<versão>/model.joblib` (validado por checksum e manifesto). Não é um stub. Características:
+[`src/triage_ml/dev_api/app.py`](../../src/triage_ml/dev_api/app.py) expõe `GET /health`, `GET /model-info`, `GET /models`, `POST /reload` e `POST /predict`. A API consome o artefato real treinado em `models/<versão>/model.joblib` (validado por checksum e manifesto). Não é um stub. Características:
 
 - **`/health`**: retorna `HealthOut(status, model_version, model_loaded)`. Se o artefato não carregar, a aplicação **não sobe** (`RuntimeError` no `lifespan`).
 - **`/model-info`** (`GET`): retorna `ModelInfoOut` com o manifesto validado do artefato (`metadata.json` validado por `validate_metadata`). Inclui `model_version`, `model_name`, `task_type`, `language`, `classes`, `label_mapping`, `random_state`, `n_train`, `n_test`, `metrics` (com `per_class`), `preprocessing`, `selection` (com `candidates` do CV 5-fold no treino), `dependency_versions`, `git_commit`, `git_dirty` e `created_at`. Útil para o dashboard de desenvolvimento e para ferramentas de validação inspecionarem o modelo em uso sem tocar o filesystem. Quando o artefato não está carregado, devolve `503 model_not_ready`.
@@ -202,11 +216,11 @@ O enunciado cita TF-IDF + RF como exemplo. Em TF-IDF, RF explode o custo de infe
   - `text` é normalizado via `Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=20000)]`.
   - Inferência registrada em `latency_ms` com `time.perf_counter`.
   - `score` vem de `predict_proba` quando disponível — `LinearSVC` não expõe probabilidades calibradas, então `score` é `null` para o artefato selecionado (informado em `README.md`).
-  - **Erros são sanitizados**: handler para `RequestValidationError` e `HTTPException` devolve `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` sem vazar texto clínico. Handler genérico para `Exception` captura qualquer caminho não tratado e devolve 500 também sanitizado.
+  - **Erros são sanitizados**: handler para `RequestValidationError` e `HTTPException` devolve `ErrorOut(request_id, error_code, message, detected_language?, detected_language_score?)` sem vazar texto clínico. Handler genérico para `Exception` captura qualquer caminho não tratado e devolve 500 também sanitizado. Os códigos preservados pelo handler de StarletteHTTPException são: `validation_failed`, `prediction_failed`, `model_not_ready`, `model_not_found`, `model_incompatible`, `language_config_incompatible` e os três códigos de política de idioma. Um erro desconhecido vira `request_failed` (intencional — não vaza detalhes).
 - **Headers em toda resposta**: `X-Request-ID` (gerado internamente — o cliente nunca controla o valor) e `Server-Timing: detect;dur=<ms>, predict;dur=<ms>` (ou apenas `detect;dur=<ms>` quando a checagem de idioma interrompe o fluxo antes do pipeline).
 - **Modelo carregado**: via `MODEL_PATH` (env) ou autodetecção da versão mais recente `YYYYMMDDTHHMMSSZ-*` em `models/`. Sem artefato, falha imediatamente.
 
-### 5.1 Checagem de idioma (`langid` local)
+### 5.2 Checagem de idioma (`langid` local)
 
 A `/predict` rejeita preventivamente qualquer texto que não esteja no allow-list `{"en"}` antes de invocar o pipeline. A política vive em `configs/api.yaml` e é carregada por `triage_ml.dev_api.config.get_api_config()` (LRU cache).
 
@@ -218,7 +232,7 @@ api:
   min_language_score: 0.0
 ```
 
-`detect_language` em `triage_ml/dev_api/language.py` aplica a política em três camadas:
+`detect_language` em `src/triage_ml/dev_api/language.py` aplica a política em três camadas:
 
 1. **Comprimento mínimo** (`min_text_chars_for_language_check = 20`). Textos mais curtos são rejeitados com `error_code=text_too_short_for_language_check` (status 422) sem chamar o detector — `langid` é instável abaixo desse limite.
 2. **Probabilidade mínima** (`min_language_score = 0.0` por default, opt-in para endurecer). A API usa uma instância própria de `LanguageIdentifier` com `norm_probs=True`; o valor fica em `[0, 1]`, mas não é confiança calibrada. Detecções abaixo do limiar viram `error_code=indeterminate_language`.
@@ -226,7 +240,7 @@ api:
 
 `ErrorOut` ganhou dois campos opcionais — `detected_language` e `detected_language_score` — para que o cliente saiba por que o pedido foi rejeitado sem expor o `text`. O corpo nunca carrega o `text` original; o `Server-Timing` agora reporta `detect;dur=<ms>, predict;dur=<ms>` quando ambos os estágios rodam, ou apenas `detect;dur=<ms>` quando o detector interrompe o fluxo.
 
-### 5.2 Evidência da validação
+### 5.3 Evidência da validação
 
 Execução de `python scripts/validate_api.py` produziu o relatório sanitizado `reports/evidence/api-dev.json` com cinco predições, três cenários de política de idioma e um teste de validação 422. Saída resumida do último run:
 
@@ -242,31 +256,35 @@ Execução de `python scripts/validate_api.py` produziu o relatório sanitizado 
 
 ## 6. Testes automatizados
 
-Cobertura por arquivo:
+Cobertura por arquivo (88 testes verdes no total, 4 novos desde a revisão cruzada de 2026-09-07):
 
-| Arquivo | Quantidade | Foco |
+| Arquivo | Funções `test_*` | Foco |
 |---|---|---|
-| `tests/test_data_preparation.py` | 4 | preparação, deduplicação, conflitos e split estratificado |
-| `tests/test_model_pipeline.py` | 9 | factories LR/LinearSVC, defaults, fit/predict multiclasses e probabilidade do LR |
-| `tests/test_model_artifact.py` | 11 | imutabilidade, checksum antes da desserialização, classes, diretório/manifesto, parâmetros declarados e rejeição de symlinks |
+| `tests/test_data_preparation.py` | 8 | preparação, deduplicação, conflitos e split estratificado (inclui enforço de `target ∈ {1..5}` declarado na Etapa 1) |
+| `tests/test_model_pipeline.py` | 10 | factories LR/LinearSVC, defaults, fit/predict multiclasses, probabilidade do LR e **reexports estáveis de `triage_ml.models`** |
+| `tests/test_model_artifact.py` | 16 | imutabilidade, checksum antes da desserialização, classes, diretório/manifesto, parâmetros declarados, **drift reverso de hiperparâmetros**, **limite superior de `std_macro_f1`** e rejeição de symlinks |
 | `tests/test_model_training.py` | 1 | integração `run_training + load_artifact`, seleção e fingerprints |
-| `tests/test_dev_api.py` | 21 | contratos HTTP, sanitização, limite de texto, manifesto, registry, artefato incompleto, reload/snapshot concorrente, 404 uniforme e headers |
-| `tests/test_dev_api_config.py` | 7 | ranges/tipos da política, YAML inválido e override inexistente |
+| `tests/test_dev_api.py` | 19 | contratos HTTP, sanitização, limite de texto, manifesto, registry, artefato incompleto, reload/snapshot concorrente, 404 uniforme, headers e **telemetria de `language_config_incompatible`** |
+| `tests/test_dev_api_config.py` | 4 | ranges/tipos da política, YAML inválido e override inexistente |
 | `tests/test_dev_api_language.py` | 10 | idioma normalizado, branches da política, timings e privacidade |
-| `tests/test_dev_dashboard_helpers.py` | 15 | helpers HTTP/renderização, redirects desativados, JSON não objeto, presets e falhas de request |
-| `tests/test_repository_structure.py` | 2 | estrutura mínima e arquivos placeholder |
+| `tests/test_dev_dashboard_helpers.py` | 18 | helpers HTTP/renderização, redirects desativados, JSON não objeto, presets e falhas de request |
+| `tests/test_repository_structure.py` | 4 | estrutura mínima e arquivos placeholder |
 
-Comando único:
+Comandos únicos:
 
 ```bash
-uv run pytest   # 80 passed
+uv run pytest tests/test_data_preparation.py tests/test_model_pipeline.py \
+              tests/test_model_artifact.py tests/test_model_training.py \
+              tests/test_dev_api.py tests/test_dev_api_config.py \
+              tests/test_dev_api_language.py tests/test_dev_dashboard_helpers.py \
+              -q   # 88 passed
 uv run ruff check .
 uv run ruff format --check .
 ```
 
 ### 6.1 Dashboard de desenvolvimento (`front/app_dev.py`)
 
-Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/predict` manualmente sem `curl`. Streamlit em modo HTTP contra qualquer URL da API (default `http://127.0.0.1:8000`, configurável na sidebar). Três abas + sidebar fixa:
+Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info`, `/models`, `/reload` e `/predict` manualmente sem `curl`. Streamlit em modo HTTP contra qualquer URL da API (default `http://127.0.0.1:8000`, configurável na sidebar). Três abas + sidebar fixa:
 
 **Abas**:
 
@@ -282,7 +300,7 @@ Ferramenta opcional para o desenvolvedor exercitar `/health`, `/model-info` e `/
   - **Identidade** — `model_version`, `model_name`, `task_type`, `language`.
   - **Treinamento** — métricas `n_train`/`n_test` via `st.metric`, `random_state`, `git_commit` (com marcação `(dirty)` quando aplicável), `created_at` e `dependency_versions`.
   - **Seleção do classificador** — `selected_classifier`, métrica, folds, `test_set_used_for_selection=False`, mais tabela inline com `mean_macro_f1 ± std_macro_f1` dos candidatos `logreg` × `linear_svc` (marcando o escolhido com `← escolhido`).
-  - **Métricas** — quatro `st.metric` (accuracy / balanced_accuracy / macro_f1 / weighted_f1) e tabela per-classe (`precision`, `recall`, `f1`, `support`).
+  - **Métricas** — quatro `st.metric` (accuracy / balanced_accuracy / macro_f1 / weighted_f1) lidos diretamente do nível raiz de `metrics` e tabela per-classe (`precision`, `recall`, `f1`, `support`). Desde a revisão cruzada de 2026-09-07, a leitura não depende mais do fallback `metrics["overall"]` (chave inexistente).
   - **Classes & mapeamento** — lista de classes e tabela com `label` ↔ `name`.
 
 O dashboard **não substitui** Prometheus/Grafana (latência, taxa de erro e volume ficam no stack de observabilidade). Não persiste payloads nem textos em disco; widgets mantêm valores em memória durante a sessão Streamlit. Helpers HTTP são cobertos por testes herméticos, não seguem redirects e limpam os caches de manifesto/modelos quando a URL da API muda.
@@ -298,10 +316,10 @@ UNSUP 422 unsupported_language det= pt score= 0.9
 
 | Risco | Status | Plano |
 |---|---|---|
-| Otimização de latência (ONNX/quantização/pruning) | Pendente | Fase 2 — `F2.T1` a `F2.T6`. Critério: Δ macro-F1 ≤ 1 pp no split de teste E ≥ 20% de redução no p95 de inferência. |
-| Instrumentação Prometheus + Compose + Grafana | Pendente | Fase 2 — `F2.T7` a `F2.T9`. `latency_ms` e `Server-Timing` já estão prontos para virar `Histogram`. |
+| Otimização de latência (ONNX/quantização/pruning) | Pendente | Etapa 5 — `F2.T1` a `F2.T6`. Critério: Δ macro-F1 ≤ 1 pp no split de teste E ≥ 20% de redução no p95 de inferência. |
+| Instrumentação Prometheus + Compose + Grafana | Pendente | Etapa 5 — `F2.T7` a `F2.T9`. `latency_ms` e `Server-Timing` já estão prontos para virar `Histogram`. |
 | API oficial com Docker e auth | Pendente | Romário, Etapa 3 — herda o contrato desta API de desenvolvimento |
-| DAG Airflow de retreino | Pendente | Denis, Etapa 7 — consome `triage_ml.models.train.run_training` |
+| DAG Airflow de retreino | ✅ Concluído (Etapa 7) | Denis, Etapa 7 — consome `triage_ml.models.train.run_training` com caminho configurável e DAG idempotente (já validado pela revisão cruzada da Etapa 1) |
 | Classe 3 (nervous system) com F1 baixo | Aceito, documentado | Investigar balanceamento de classes e features mais ricas (n-gramas maiores, char n-gramas) em baseline da Fase 2 antes da otimização |
 | Holdout reutilizado por experimento legado | Limitação metodológica documentada | Tratar o split atual como desenvolvimento e reservar novo holdout ou usar nested CV antes de uma afirmação final de generalização |
 | Artefato canônico com `git_dirty=true` | Pendente de promoção limpa | Regenerar modelo/evidência a partir de commit limpo antes da entrega final |
@@ -325,7 +343,10 @@ curl -s -X POST http://127.0.0.1:8000/predict \
   -d '{"text":"Acute myocardial infarction in a 62yo after chest pain."}' | jq
 
 # 5. Testes e lint
-uv run pytest
+uv run pytest tests/test_data_preparation.py tests/test_model_pipeline.py \
+              tests/test_model_artifact.py tests/test_model_training.py \
+              tests/test_dev_api.py tests/test_dev_api_config.py \
+              tests/test_dev_api_language.py tests/test_dev_dashboard_helpers.py -q
 uv run ruff check . && uv run ruff format --check .
 ```
 
@@ -333,10 +354,11 @@ uv run ruff check . && uv run ruff format --check .
 
 ```
 docs/
-├── CHECKLIST.md                                      (marcador oficial da Etapa 2)
-├── plans/PLAN-text-classifier.md                    (plano detalhado Fase 1 + Fase 2)
-├── dataset.md                                        (decisão de dataset e licença)
-└── reports/Etapa_2_Modelo_baseline_e_serialização.md          (este documento)
+├── CHECKLIST.md                                              (marcador oficial da Etapa 2)
+├── plans/PLAN-text-classifier.md                             (plano detalhado Fase 1 + Fase 2)
+├── dataset.md                                                (decisão de dataset e licença)
+├── adr/0001-escolha-recorte-dataset.md                       (ADR da Etapa 1 referenciado pela Etapa 2)
+└── reports/Etapa_2_Modelo_baseline_e_serialização.md         (este documento)
 
 models/
 └── 20260823T135811Z-bed2194376bc/
@@ -351,27 +373,49 @@ reports/
 └── evidence/api-dev.json
 
 src/triage_ml/
-├── dev_api/{app.py, schemas.py, language.py, config.py}  (FastAPI de desenvolvimento + checagem de idioma)
-├── models/{artifact.py, pipeline.py, train.py}      (treino + contrato do artefato)
-├── data/{prepare.py}                                (dedup, sem leakage)
-└── monitoring/                                       (reservado para Fase 2)
+├── dev_api/{app.py, schemas.py, language.py, config.py}      (FastAPI de desenvolvimento + checagem de idioma)
+├── models/
+│   ├── __init__.py                                            (reexports estáveis adicionados em 2026-09-07)
+│   ├── artifact.py                                            (load_artifact + validate_metadata; drift reverso + std_macro_f1)
+│   ├── pipeline.py
+│   └── train.py
+├── data/{prepare.py}                                          (dedup, sem leakage; valida target ∈ {1..5})
+└── monitoring/                                                (reservado para Etapa 5)
 
 tests/
+├── test_data_preparation.py
 ├── test_model_pipeline.py
 ├── test_model_artifact.py
 ├── test_model_training.py
 ├── test_dev_api.py
+├── test_dev_api_config.py
 ├── test_dev_api_language.py
-└── test_dev_dashboard_helpers.py
+├── test_dev_dashboard_helpers.py
+└── test_repository_structure.py
 
 configs/
-├── training.yaml                                    (hiperparâmetros + label_mapping)
-└── api.yaml                                          (allow-list de idiomas + thresholds)
+├── training.yaml                                              (hiperparâmetros + label_mapping)
+└── api.yaml                                                    (allow-list de idiomas + thresholds)
+
+scripts/
+└── validate_api.py                                             (gera reports/evidence/api-dev.json)
+
 front/
-├── app_dev.py                                       (dashboard Streamlit de validação manual)
-└── README.md                                         (instruções e escopo)
+├── app_dev.py                                                  (dashboard Streamlit de validação manual)
+└── README.md                                                    (instruções e escopo)
 ```
 
 ## 10. Conclusão
 
-A Fase 1 entrega o baseline do classificador e endurece o contrato do artefato para consumo pela Etapa 3 (API oficial) e pela Etapa 7 (Airflow). O pipeline TF-IDF + LinearSVC atinge `macro-F1 = 0.7296` no split avaliado, e a execução atual seleciona o classificador por CV 5-fold somente no treino; a reutilização histórica desse holdout permanece explicitada como limitação. A API de desenvolvimento já entrega `latency_ms`, request_id interno e `Server-Timing` consumindo o modelo real. Antes da promoção final, o artefato deve ser regenerado em commit limpo. O restante do trabalho está descrito em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md).
+A Etapa 2 entrega o baseline do classificador e endurece o contrato do artefato para consumo pela Etapa 3 (API oficial) e pela Etapa 7 (Airflow). O pipeline TF-IDF + LinearSVC atinge `macro-F1 = 0.7296` no split avaliado, e a execução atual seleciona o classificador por CV 5-fold somente no treino; a reutilização histórica desse holdout permanece explicitada como limitação. A API de desenvolvimento já entrega `latency_ms`, request_id interno e `Server-Timing` consumindo o modelo real.
+
+A revisão cruzada de Bill em 2026-09-07 endureceu cinco pontos sem alterar comportamento observável pelos consumidores externos: o dashboard passa a ler as métricas agregadas diretamente do manifesto validado, o loader rejeita manifesto com hiperparâmetro não presente no step treinado, o esquema do manifesto passa a simetricamente limitar `std_macro_f1` em `[0, 1]`, o handler de Starlette preserva `language_config_incompatible` em vez de colapsá-lo em `request_failed` (mantendo a telemetria de drift de configuração), e `triage_ml.models` re-exporta 13 símbolos estáveis para reduzir o atrito de import path entre o dev API, a DAG e o dashboard. Os quatro testes novos (88 totais, antes 84) travam esses comportamentos.
+
+Antes da promoção final, o artefato deve ser regenerado em commit limpo. O restante do trabalho está descrito em [`docs/plans/PLAN-text-classifier.md`](../plans/PLAN-text-classifier.md).
+
+## 11. Histórico de revisões deste relatório
+
+| Data | Autor | Mudança |
+|---|---|---|
+| 2026-08-23 | Bill (versão inicial) | Baseline TF-IDF + LinearSVC, dev API, dashboard e testes (80 testes verdes). |
+| 2026-09-07 | Bill (revisão cruzada) | Atualização do estado pós-revisão cruzada: cabeçalho aponta para revisão de 2026-09-07, nova tabela §2.2 com os cinco pontos e seus commits; §4.2 e §4.3 atualizados para refletir `std_macro_f1 ≤ 1` e o check de drift reverso; §5.1 lista os códigos de erro preservados pelo handler; §6 atualiza contagens de testes (88 totais, 4 novos) e adiciona os 4 novos testes pelo nome; §7 marca a integração com Airflow como concluída (Etapa 7); §8 usa o comando pytest que cobre os 88 testes; §9 expande o mapa com `__init__.py`, `scripts/validate_api.py`, ADR 0001 e arquivos de teste adicionais; §10 inclui parágrafo sobre a revisão cruzada. |
