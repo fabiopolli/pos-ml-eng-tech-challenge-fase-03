@@ -367,6 +367,10 @@ foi concluída com sucesso no [PR #5](https://github.com/fabiopolli/pos-ml-eng-t
 
 A validação detalhada das imagens está em
 [`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
+Os relatórios individuais das etapas concluídas estão em `docs/reports/`
+(`Etapa_1`, `Etapa_2`, `Etapa_3`, `Etapa_4` e `Etapa_8`); o status consolidado
+e os itens pendentes (cloud, otimização, vídeo STAR) vivem em
+[`docs/reports/Etapa_8_Cloud_video_documentacao.md`](docs/reports/Etapa_8_Cloud_video_documentacao.md).
 
 ## Plano de implementação
 
