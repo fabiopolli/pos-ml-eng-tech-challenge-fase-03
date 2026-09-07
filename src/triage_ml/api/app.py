@@ -11,7 +11,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from triage_ml.api.auth import RequireRole, get_current_role
+from triage_ml.api.auth import RequirePredictRole, RequireRole
 from triage_ml.api.logging_config import setup_logging
 from triage_ml.api.ratelimit import create_limiters
 from triage_ml.api.schemas import (
@@ -25,11 +25,39 @@ from triage_ml.api.schemas import (
     ReloadOut,
 )
 from triage_ml.api.settings import Settings, get_settings
-from triage_ml.dev_api.app import ModelHolder, _default_model_path, _list_model_versions
+from triage_ml.dev_api.app import (
+    ALLOWED_ERROR_CODES,
+    ModelHolder,
+    _default_model_path,
+    _list_model_versions,
+)
 from triage_ml.dev_api.config import get_api_config
 from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
 
 logger = structlog.get_logger("triage_ml.api")
+
+
+def _resolve_error_code(detail: object) -> str:
+    """Map ``HTTPException.detail`` to a controlled allow-list.
+
+    Mirrors ``triage_ml.dev_api.app`` so prod and dev return the same
+    error_code vocabulary. Unknown or non-string details collapse to
+    ``"request_failed"`` so internal exception messages never leak into
+    the response body.
+    """
+
+    if isinstance(detail, str) and detail in ALLOWED_ERROR_CODES:
+        return detail
+    return "request_failed"
+
+
+def _request_id_for(request: Request) -> str | None:
+    """Return the per-request correlation id or ``None`` if the middleware
+    did not run (defensive: the middleware is always mounted, but a stray
+    unhandled exception before it should not surface ``"unknown"`` to the
+    client)."""
+
+    return getattr(request.state, "request_id", None)
 
 
 def create_app(*, holder: ModelHolder | None = None, settings: Settings | None = None) -> FastAPI:
@@ -74,16 +102,18 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         latency_ms = (time.perf_counter() - start_time) * 1000.0
         response.headers["X-Request-ID"] = request_id
 
-        # Headers Server-Timing para observabilidade
+        # Server-Timing: always emit the total, then enrich with per-stage
+        # measurements when the handler populated ``request.state``. This
+        # keeps observability uniform across endpoints that do not need
+        # language detection (e.g. /health, /models, /reload).
         detect_ms = getattr(request.state, "detect_latency_ms", None)
         predict_ms = getattr(request.state, "predict_latency_ms", None)
-        timing_parts = []
+        timing_parts = [f"total;dur={latency_ms:.3f}"]
         if detect_ms is not None:
             timing_parts.append(f"detect;dur={detect_ms:.3f}")
         if predict_ms is not None:
             timing_parts.append(f"predict;dur={predict_ms:.3f}")
-        if timing_parts:
-            response.headers["Server-Timing"] = ", ".join(timing_parts)
+        response.headers["Server-Timing"] = ", ".join(timing_parts)
 
         # Logging sanitizado (nunca exibe payloads clínicos)
         logger.info("request_finished", status_code=response.status_code, latency_ms=latency_ms)
@@ -91,24 +121,45 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError):
-        req_id = getattr(request.state, "request_id", "unknown")
+        # Log the failing fields server-side for observability without ever
+        # echoing them to the client (avoids leaking the input shape).
+        req_id = _request_id_for(request)
+        structlog.contextvars.bind_contextvars(request_id=req_id)
+        logger.info(
+            "validation_failed",
+            error_count=len(exc.errors()),
+            error_types=[err.get("type") for err in exc.errors()],
+        )
         return JSONResponse(
             status_code=422,
             content=ErrorOut(
-                request_id=req_id, error_code="validation_failed", message="Invalid payload."
+                request_id=req_id,
+                error_code="validation_failed",
+                message="Request body is invalid.",
             ).model_dump(),
         )
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
-        req_id = getattr(request.state, "request_id", "unknown")
-        error_code = exc.detail if isinstance(exc.detail, str) else "request_failed"
-        message = "Request could not be processed."
+        req_id = _request_id_for(request)
+        error_code = _resolve_error_code(exc.detail)
+        if isinstance(exc.detail, str) and exc.detail != error_code:
+            # Detail was a string but not in the allow-list; record it for
+            # diagnostics without echoing it to the client.
+            logger.warning(
+                "error_code_filtered",
+                requested_code=exc.detail,
+                resolved_code=error_code,
+                status_code=exc.status_code,
+            )
 
+        message = "Request could not be processed."
         if error_code == "clinician_review_required":
             message = "Patient roles cannot access raw clinical predictions directly."
         elif error_code == "unauthorized":
             message = "Missing or invalid API Key."
+        elif error_code == "forbidden":
+            message = "API key is not authorized for this operation."
 
         # Propaga dados de política de idioma sem vazar o texto
         det_lang = getattr(request.state, "detected_language", None)
@@ -127,9 +178,10 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
 
     @app.exception_handler(Exception)
     async def general_handler(request: Request, exc: Exception):
-        req_id = getattr(request.state, "request_id", "unknown")
-        # Sanitização de log: captura apenas o tipo da exceção, evita expor o texto
-        logger.error("internal_error", error_type=type(exc).__name__)
+        req_id = _request_id_for(request)
+        # ``logger.exception`` rides on ``format_exc_info`` from
+        # ``logging_config.setup_logging`` to surface the traceback.
+        logger.exception("internal_error", error_type=type(exc).__name__)
         return JSONResponse(
             status_code=500,
             content=ErrorOut(
@@ -151,14 +203,22 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         )
 
     @app.get("/model-info", response_model=ModelInfoOut)
-    def model_info(request: Request):
+    def model_info(request: Request, role: str = Depends(RequireRole(["service", "doctor"]))):
+        # ``/model-info`` exposes the full training manifest (label names,
+        # hyperparameters, dependency versions, git metadata). Restrict it
+        # to service and doctor roles so unauthenticated probes cannot
+        # fingerprint the stack or the class taxonomy.
         pipeline, metadata, _, _ = holder.snapshot()
         if not pipeline:
             raise HTTPException(status_code=503, detail="model_not_ready")
         return ModelInfoOut(**metadata)
 
     @app.get("/models", response_model=ModelsListOut)
-    def list_models(request: Request):
+    def list_models(
+        request: Request, role: str = Depends(RequireRole(["service", "doctor"]))
+    ):
+        # Same reasoning as /model-info: the registry fingerprint is useful
+        # reconnaissance data and must stay behind RBAC.
         _, _, _, model_version = holder.snapshot()
         return ModelsListOut(
             versions=_list_model_versions(holder.registry_root), current=model_version
@@ -172,30 +232,40 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
     @ip_limiter.limit(settings.ratelimit_default)
     @api_key_limiter.limit(settings.ratelimit_default)
     def reload_model(
-        request: Request, payload: ReloadIn, role: str = Depends(RequireRole(["service"]))
+        request: Request,
+        payload: ReloadIn,
+        role: str = Depends(RequireRole(["service"])),
     ):
         try:
             version = holder.reload_to(payload.model_version)
+            logger.info("model_reloaded", model_version=version, role=role)
             return ReloadOut(model_version=version, model_loaded=True)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail="model_not_found") from exc
         except Exception as exc:
-            logger.error("reload_failed", error_type=type(exc).__name__)
+            logger.error(
+                "reload_failed",
+                model_version=payload.model_version,
+                error_type=type(exc).__name__,
+            )
             raise HTTPException(status_code=500, detail="model_incompatible") from exc
 
     @app.post("/predict", response_model=PredictOut)
     @ip_limiter.limit(settings.ratelimit_predict)
     @api_key_limiter.limit(settings.ratelimit_predict)
-    def predict(request: Request, payload: PredictIn, role: str = Depends(get_current_role)):
-        # Security Gate: Strict RBAC
-        if role == "patient":
-            raise HTTPException(status_code=403, detail="clinician_review_required")
-        if role != "doctor":
-            raise HTTPException(status_code=403, detail="forbidden")
+    def predict(
+        request: Request,
+        role: str = Depends(RequirePredictRole()),
+        payload: PredictIn = ...,
+    ):
+        # Security Gate: RBAC is centralised in ``RequirePredictRole``.
+        # ``doctor`` is the only role allowed to invoke /predict; patient
+        # is rejected with ``clinician_review_required`` (different from
+        # the generic ``forbidden`` so dashboards can render a meaningful
+        # explanation), and service is rejected with ``forbidden``.
+        _ = role  # already enforced by RequirePredictRole above
 
-        start = time.perf_counter()
-        req_id = request.state.request_id
-
+        req_id = _request_id_for(request)
         pipeline, metadata, label_names, model_version = holder.snapshot()
         if not pipeline:
             raise HTTPException(status_code=503, detail="model_not_ready")
@@ -219,7 +289,10 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
 
         request.state.detect_latency_ms = (time.perf_counter() - detect_start) * 1000.0
 
-        # Etapa de predição
+        # Etapa de predição — ``predict_latency_ms`` é medido a partir daqui
+        # para que o campo ``latency_ms`` no body cubra apenas a inferência
+        # do pipeline (e não a detecção de idioma, que já tem seu próprio
+        # slot em ``Server-Timing``).
         predict_start = time.perf_counter()
         try:
             label = int(pipeline.predict([payload.text])[0])
@@ -230,19 +303,23 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
                 score = float(proba[index])
         except Exception as exc:
             request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
-            logger.error("prediction_failed", error_type=type(exc).__name__)
+            logger.error(
+                "prediction_failed",
+                error_type=type(exc).__name__,
+                model_version=model_version,
+            )
             raise HTTPException(status_code=500, detail="prediction_failed") from exc
 
         request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
 
-        latency = (time.perf_counter() - start) * 1000
+        latency = (time.perf_counter() - predict_start) * 1000
         return PredictOut(
             label=label,
             label_name=label_names.get(label, str(label)),
             score=score,
             model_version=model_version or "unknown",
-            latency_ms=latency,
-            request_id=req_id,
+            latency_ms=round(latency, 3),
+            request_id=req_id or "unknown",
         )
 
     return app
