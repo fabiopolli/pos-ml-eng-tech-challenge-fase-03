@@ -14,7 +14,6 @@ server-side secret manager.
 from __future__ import annotations
 
 import hmac
-import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -245,8 +244,16 @@ def _render_doctor_dashboard(config: DashboardConfig) -> None:
         return
 
     if response.status_code != 200:
-        st.error(f"A predição não foi concluída (HTTP {response.status_code}).")
-        st.code(json.dumps(response.body, ensure_ascii=False, indent=2), language="json")
+        # Never echo the raw error body to the browser: future API
+        # regressions could leak stack traces or internal paths. The
+        # ``request_id`` is the only piece of information the doctor needs
+        # to cross-reference with logs/telemetry.
+        st.error(
+            "A predição não pôde ser concluída. Contate a equipe técnica com "
+            "o Request ID abaixo se o problema persistir."
+        )
+        request_id = response.request_id or response.body.get("request_id", "—")
+        st.caption(f"Request ID: `{request_id}`")
         return
 
     st.success("Predição concluída. Interprete o resultado somente no contexto clínico.")
