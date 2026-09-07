@@ -42,10 +42,11 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import streamlit as st
+
+from triage_ml.url_validation import validate_public_http_url
 
 # --- Constantes visuais (dark mode premium, identidade da Fase 02) ---
 PAGE_TITLE = "triage_ml — Dev API"
@@ -154,24 +155,15 @@ def _request_json(
 
 
 def _normalize_api_url(url: str) -> str:
-    """Accept only explicit HTTP(S) URLs without credentials or URL ambiguity."""
+    """Accept only explicit HTTP(S) URLs that resolve to a public address.
 
-    candidate = url.strip().rstrip("/")
-    parsed = urlsplit(candidate)
-    try:
-        _ = parsed.port
-    except ValueError as exc:
-        raise ValueError("API URL has an invalid port") from exc
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("API URL must be HTTP(S) without credentials, query, or fragment")
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+    The dev dashboard is meant to hit ``http://127.0.0.1:8000`` during
+    local development, so loopback is allowed. RFC1918, link-local and
+    cloud metadata endpoints (``169.254.169.254``) are still rejected
+    to prevent accidental SSRF if the operator types a hostile URL.
+    """
+
+    return validate_public_http_url(url, allow_loopback=True)
 
 
 def _check_health(api_url: str) -> ApiResponse:
@@ -230,7 +222,15 @@ def _reload_model(api_url: str, model_version: str) -> ApiResponse:
 def _render_response(response: ApiResponse, *, expected_error_code: str | None) -> None:
     """Render the API response with the same shape regardless of status."""
 
-    status_label = "✅ sucesso" if response.status_code == SUCCESS_STATUS else "❌ erro"
+    # ``/health`` returns HTTP 503 with ``status="degraded"`` while the
+    # artifact is still loading (post-deploy boot, retry after ``/reload``
+    # etc). Surface that as informational rather than as a red error.
+    if response.status_code == 503 and response.body.get("status") == "degraded":
+        status_label = "⏳ inicializando"
+    elif response.status_code == SUCCESS_STATUS:
+        status_label = "✅ sucesso"
+    else:
+        status_label = "❌ erro"
     st.markdown(
         f"**HTTP {response.status_code}** · {status_label} · "
         f"`{response.elapsed_ms:.2f} ms` (round-trip do client)"
@@ -246,7 +246,23 @@ def _render_response(response: ApiResponse, *, expected_error_code: str | None) 
             )
 
     st.markdown("**Body**")
-    st.code(json.dumps(response.body, indent=2, ensure_ascii=False), language="json")
+    if response.status_code == SUCCESS_STATUS:
+        st.code(json.dumps(response.body, indent=2, ensure_ascii=False), language="json")
+    else:
+        # On failure the backend only returns ``error_code``,
+        # ``request_id`` and a static ``message``. Render only that
+        # subset so a future regression that leaks ``detail`` (raw
+        # Pydantic errors, traceback fragments, etc.) cannot surface
+        # sensitive content here.
+        safe = {
+            key: response.body[key]
+            for key in ("error_code", "request_id", "message", "status")
+            if response.body.get(key) is not None
+        }
+        st.code(
+            json.dumps(safe or {"message": "(no payload)"}, indent=2, ensure_ascii=False),
+            language="json",
+        )
 
     st.markdown("**Headers relevantes**")
     headers_view = {

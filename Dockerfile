@@ -18,6 +18,7 @@ FROM python:3.12.11-slim-bookworm AS runtime-base
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src \
     TRIAGE_ML_API_CONFIG=/app/configs/api.yaml
 
 RUN groupadd --gid 10001 triage \

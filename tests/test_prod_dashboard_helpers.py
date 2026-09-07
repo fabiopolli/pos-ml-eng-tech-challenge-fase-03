@@ -46,7 +46,9 @@ def dashboard_environment() -> dict[str, str]:
     """Return synthetic, non-secret configuration for a dashboard session."""
 
     return {
-        "TRIAGE_ML_PROD_API_URL": "http://127.0.0.1:8000",
+        # ``8.8.8.8`` is a well-known public IP literal; we use it as a
+        # syntactically valid production URL without ever contacting it.
+        "TRIAGE_ML_PROD_API_URL": "http://8.8.8.8:8000",
         "TRIAGE_ML_API_KEY_DOCTOR": "doc-" + "0" * 30,
         "TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME": "doctor-demo",
         "TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD": "doctor-password",
@@ -65,11 +67,31 @@ def test_config_requires_all_runtime_secrets(dashboard_module):
 
 def test_config_normalizes_the_api_url(dashboard_module):
     environment = dashboard_environment()
-    environment["TRIAGE_ML_PROD_API_URL"] = "http://127.0.0.1:8000/"
+    environment["TRIAGE_ML_PROD_API_URL"] = "http://8.8.8.8:8000/"
 
     config = dashboard_module.load_config(environment)
 
-    assert config.api_url == "http://127.0.0.1:8000"
+    assert config.api_url == "http://8.8.8.8:8000"
+
+
+def test_prod_api_url_rejects_loopback(dashboard_module) -> None:
+    """Production deploys must never resolve to a loopback address."""
+
+    environment = dashboard_environment()
+    environment["TRIAGE_ML_PROD_API_URL"] = "http://127.0.0.1:8000"
+
+    with pytest.raises(ValueError, match="non-public address"):
+        dashboard_module.load_config(environment)
+
+
+def test_prod_api_url_rejects_cloud_metadata(dashboard_module) -> None:
+    """``169.254.169.254`` is the canonical cloud metadata endpoint."""
+
+    environment = dashboard_environment()
+    environment["TRIAGE_ML_PROD_API_URL"] = "http://169.254.169.254/latest/meta-data/"
+
+    with pytest.raises(ValueError, match="forbidden"):
+        dashboard_module.load_config(environment)
 
 
 @pytest.mark.parametrize(
@@ -107,7 +129,7 @@ def test_doctor_prediction_uses_server_side_doctor_key(dashboard_module):
         result = dashboard_module.doctor_predict(config, "Synthetic English clinical text.")
 
     assert result.status_code == 200
-    assert mocked.call_args.kwargs["url"] == "http://127.0.0.1:8000/predict"
+    assert mocked.call_args.kwargs["url"] == "http://8.8.8.8:8000/predict"
     assert mocked.call_args.kwargs["headers"]["X-API-Key"] == config.doctor_api_key
     assert mocked.call_args.kwargs["json"] == {"text": "Synthetic English clinical text."}
     assert mocked.call_args.kwargs["allow_redirects"] is False

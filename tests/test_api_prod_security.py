@@ -290,7 +290,6 @@ def test_prod_lifespan_blocks_when_languages_differ(
 ) -> None:
     """A prod deployment with mismatched language config must abort startup."""
 
-    from triage_ml.api import app as api_app
     from triage_ml.dev_api import config as dev_api_config
 
     class PtHolder(DummyHolder):

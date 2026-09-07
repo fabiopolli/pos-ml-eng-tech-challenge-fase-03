@@ -16,6 +16,11 @@ def test_api_dockerfile_has_reproducible_runtime_guards() -> None:
     assert "HEALTHCHECK" in dockerfile
     assert '"--workers", "1"' in dockerfile
     assert "COPY models" not in dockerfile
+    # The fronts (Streamlit) and the API share the same ``triage_ml``
+    # package; setting PYTHONPATH at runtime-base lets ``streamlit run
+    # front/app_dev.py`` resolve ``from triage_ml.url_validation import
+    # ...`` without packaging ``src/`` as a wheel inside the image.
+    assert "PYTHONPATH=/app/src" in dockerfile
 
 
 def test_api_compose_mounts_models_read_only_and_requires_secrets() -> None:
@@ -62,3 +67,13 @@ def test_front_containers_are_isolated_and_depend_on_healthy_api() -> None:
     assert dashboard_environment["TRIAGE_ML_DEV_API_KEY_DOCTOR"].startswith(
         "${TRIAGE_ML_DEV_API_KEY_DOCTOR:?"
     )
+
+    # The ``dashboard-dev`` default URL points at ``http://api-dev:8000``,
+    # so the profile ``dev`` must also define a matching ``api-dev``
+    # service — otherwise the dashboard would never connect.
+    api_dev = compose["services"].get("api-dev")
+    assert api_dev is not None, "compose must define api-dev under profiles: [dev]"
+    assert api_dev["profiles"] == ["dev"]
+    assert api_dev["read_only"] is True
+    assert api_dev["cap_drop"] == ["ALL"]
+    assert api_dev["security_opt"] == ["no-new-privileges:true"]

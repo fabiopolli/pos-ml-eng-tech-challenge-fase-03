@@ -20,7 +20,11 @@ from triage_ml.models.train import load_config, run_training
 
 MAX_DATASET_BYTES = 200 * 1024 * 1024
 MAX_MANIFEST_BYTES = 1 * 1024 * 1024
-_CREDENTIAL_PATTERN = re.compile(r"(://)([^/\s:@]+):([^@\s/]+)@")
+# Match either inline userinfo (``scheme://user:token@``) or env-var leaks
+# in git stderr (``DAGSHUB_USERNAME=...`` / ``DAGSHUB_USER_TOKEN=...``).
+_CREDENTIAL_PATTERN = re.compile(
+    r"(://)([^/\s:@]+):([^@\s/]+)@|(?P<env>DAGSHUB_(?:USERNAME|USER_TOKEN)=[^\s/]+)"
+)
 
 
 def file_sha256(path: str | Path) -> str:
@@ -41,9 +45,20 @@ def _safe_relative_path(value: str) -> PurePosixPath:
 
 
 def _redact_credentials(text: str) -> str:
-    """Strip accidental ``user:token@host`` segments from command stderr/stdout."""
+    """Strip accidental credentials from command stderr/stdout.
 
-    return _CREDENTIAL_PATTERN.sub(r"\1[REDACTED]@", text)
+    Covers two leak channels:
+
+    * ``scheme://user:token@host`` URLs that git may echo back on auth
+      failure (replaced with ``scheme://[REDACTED]@host``).
+    * ``DAGSHUB_USERNAME=...`` and ``DAGSHUB_USER_TOKEN=...`` env-var
+      fragments that can appear in hooks or proxy error messages.
+    """
+
+    return _CREDENTIAL_PATTERN.sub(
+        lambda match: "[REDACTED]" if match.group("env") else f"{match.group(1)}[REDACTED]@",
+        text,
+    )
 
 
 def _ensure_no_symlink_ancestor(path: Path) -> None:

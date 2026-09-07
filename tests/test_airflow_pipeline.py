@@ -181,6 +181,19 @@ def test_git_subprocess_errors_redact_credentials_in_stderr() -> None:
     assert "[REDACTED]" in message
 
 
+def test_redact_credentials_strips_dagshub_env_var_leaks() -> None:
+    """``DAGSHUB_USER_TOKEN=...`` in stderr must not surface to logs."""
+
+    from triage_ml.orchestration import airflow_pipeline
+
+    sanitized = airflow_pipeline._redact_credentials(
+        "fatal: env DAGSHUB_USER_TOKEN=s3cr3t-token DAGSHUB_USERNAME=alice"
+    )
+    assert "s3cr3t-token" not in sanitized
+    assert "alice" not in sanitized
+    assert "[REDACTED]" in sanitized
+
+
 def test_ingestion_refuses_destination_through_symlink(tmp_path: Path) -> None:
     """A symlink in any ancestor of the destination must abort the publish step."""
 

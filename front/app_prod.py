@@ -18,10 +18,11 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from time import perf_counter
-from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import streamlit as st
+
+from triage_ml.url_validation import validate_public_http_url
 
 PAGE_TITLE = "triage_ml — Portal Clínico"
 PAGE_ICON = "🩺"
@@ -58,24 +59,16 @@ class ApiResponse:
 
 
 def _normalize_api_url(url: str) -> str:
-    """Accept an explicit HTTP(S) URL without embedded credentials."""
+    """Accept an explicit HTTP(S) URL that resolves to a public address.
 
-    candidate = url.strip().rstrip("/")
-    parsed = urlsplit(candidate)
-    try:
-        _ = parsed.port
-    except ValueError as exc:
-        raise ValueError("API URL has an invalid port") from exc
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise ValueError("API URL must be HTTP(S) without credentials, query, or fragment")
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+    Production deployments must never accept loopback, RFC1918 or
+    link-local hosts: an attacker could otherwise trick the dashboard
+    into fetching cloud metadata endpoints (``169.254.169.254``) or
+    internal services. The dev dashboard explicitly opts in to loopback
+    via ``allow_loopback=True``.
+    """
+
+    return validate_public_http_url(url, allow_loopback=False)
 
 
 def load_config(environ: Mapping[str, str] | None = None) -> DashboardConfig:
@@ -202,6 +195,12 @@ def _render_health(config: DashboardConfig) -> None:
         st.error(f"Não foi possível consultar a API: {exc}")
         return
 
+    if response.status_code == 503 and response.body.get("status") == "degraded":
+        st.info(
+            "API ainda está inicializando o modelo (HTTP 503, status degraded). "
+            "Aguardando o artefato carregar — tente novamente em alguns segundos."
+        )
+        return
     if response.status_code != 200:
         st.warning(f"Health retornou HTTP {response.status_code}.")
         return
@@ -331,6 +330,19 @@ def _render_login(config: DashboardConfig) -> None:
     st.subheader("Entrar no Portal Clínico")
     st.write("Use seu usuário e senha. O perfil de acesso é definido pelas credenciais.")
     st.caption("Ambiente demonstrativo: não use credenciais pessoais ou dados clínicos reais.")
+
+    # Naive per-session login throttle: after 3 consecutive failures the
+    # form is locked for ``2 ** attempts`` seconds. The portal still has
+    # only the two demo accounts (medico-demo / paciente-demo), so this
+    # is purely to stop casual brute-force attempts.
+    attempts = int(st.session_state.get("login_attempts", 0))
+    lockout_until = float(st.session_state.get("login_lockout_until", 0.0))
+    now = perf_counter()
+    if lockout_until > now:
+        remaining = int(lockout_until - now) + 1
+        st.error(f"Aguarde {remaining}s antes de tentar novamente (limite de tentativas excedido).")
+        return
+
     with st.form("login"):
         username = st.text_input("Usuário", autocomplete="username")
         password = st.text_input("Senha", type="password", autocomplete="current-password")
@@ -340,7 +352,13 @@ def _render_login(config: DashboardConfig) -> None:
         role = authenticate(username, password, config)
         if role is None:
             st.error("Credenciais inválidas.")
+            st.session_state["login_attempts"] = attempts + 1
+            if attempts + 1 >= 3:
+                # Exponential backoff: 4s, 8s, 16s, 32s ...
+                st.session_state["login_lockout_until"] = perf_counter() + (2**attempts)
             return
+        st.session_state["login_attempts"] = 0
+        st.session_state["login_lockout_until"] = 0.0
         st.session_state["dashboard_role"] = role
         st.rerun()
 
