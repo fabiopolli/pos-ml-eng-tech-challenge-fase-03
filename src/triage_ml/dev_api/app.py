@@ -51,6 +51,34 @@ logger = logging.getLogger("triage_ml.dev_api")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+# Allow-list of error_codes the HTTPException handler is allowed to echo back
+# to clients. Anything else collapses to ``"request_failed"`` so internal
+# exception messages never leak into the response body. Shared with the
+# production API (``triage_ml.api.app``) so both endpoints expose the same
+# vocabulary to clients and telemetry consumers.
+LANGUAGE_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "unsupported_language",
+        "text_too_short_for_language_check",
+        "indeterminate_language",
+        "language_config_incompatible",
+    }
+)
+ALLOWED_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "validation_failed",
+        "prediction_failed",
+        "model_not_ready",
+        "model_not_found",
+        "model_incompatible",
+        "unauthorized",
+        "forbidden",
+        "clinician_review_required",
+    }
+    | LANGUAGE_ERROR_CODES
+)
+
+
 def _default_model_path() -> Path:
     models_dir = REPO_ROOT / "models"
     versions = _list_model_versions(models_dir)
@@ -230,22 +258,9 @@ def create_app(
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         request_id = getattr(request.state, "request_id", None)
-        language_codes = {
-            "unsupported_language",
-            "text_too_short_for_language_check",
-            "indeterminate_language",
-        }
-        allowed_codes = {
-            "validation_failed",
-            "prediction_failed",
-            "model_not_ready",
-            "model_not_found",
-            "model_incompatible",
-            "language_config_incompatible",
-        } | language_codes
-        error_code = exc.detail if exc.detail in allowed_codes else "request_failed"
+        error_code = exc.detail if exc.detail in ALLOWED_ERROR_CODES else "request_failed"
         message = "Request could not be processed."
-        if error_code in language_codes:
+        if error_code in LANGUAGE_ERROR_CODES:
             message = "Only English texts are supported."
         elif error_code == "model_not_found":
             message = "Requested model version was not found under models/."

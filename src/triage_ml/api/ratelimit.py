@@ -8,10 +8,19 @@ reaches a limiter key, log entry, or response.
 from __future__ import annotations
 
 import hashlib
+import hmac
+import os
 
 from fastapi import Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+
+# Per-process salt, generated once at import time. Mixing it into the
+# fingerprint ensures that even a caller rotating ``X-API-Key`` headers
+# cannot enumerate fingerprints in advance (precomputed rainbow tables
+# are useless), and that an attacker exfiltrating the salt would have to
+# also exfiltrate the rest of the process memory to correlate keys.
+_SALT: bytes = os.urandom(32)
 
 
 def get_api_key_fingerprint(request: Request) -> str:
@@ -21,7 +30,8 @@ def get_api_key_fingerprint(request: Request) -> str:
     if not api_key:
         return "anonymous"
 
-    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    digest = hmac.new(_SALT, api_key.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"k:{digest}"
 
 
 def create_limiters() -> tuple[Limiter, Limiter]:
