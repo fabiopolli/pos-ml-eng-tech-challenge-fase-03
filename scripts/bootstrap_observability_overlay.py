@@ -29,6 +29,7 @@ they are present *before* invocation).
 from __future__ import annotations
 
 import argparse
+import os
 import secrets
 import sys
 from datetime import datetime
@@ -150,6 +151,31 @@ def render_env(env: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _ensure_infra_symlink(env_file: Path) -> Path | None:
+    """Create ``infra/.env -> ../.env`` so the overlay can find it.
+
+    ``docker compose -f infra/docker-compose.yml up`` resolves ``.env``
+    relative to the *project directory*, which is the directory that
+    contains the compose file (``infra/``) — not the current working
+    directory. Creating a symlink lets the user invoke the overlay
+    without having to remember ``--env-file ../.env`` or
+    ``--project-directory .``.
+
+    Returns the resolved symlink path on success, or ``None`` if no
+    compose file is found (we leave the user with no broken symlink).
+    """
+
+    compose = REPO_ROOT / "infra" / "docker-compose.yml"
+    if not compose.is_file():
+        return None
+    symlink = REPO_ROOT / "infra" / ".env"
+    if symlink.is_symlink() or symlink.exists():
+        symlink.unlink()
+    rel_target = os.path.relpath(env_file, start=symlink.parent)
+    symlink.symlink_to(rel_target)
+    return symlink
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -168,6 +194,11 @@ def main() -> int:
         action="store_true",
         help="Print the rendered .env to stdout instead of writing the file",
     )
+    parser.add_argument(
+        "--no-symlink",
+        action="store_true",
+        help="Skip creating the infra/.env symlink",
+    )
     args = parser.parse_args()
 
     env = build_env(force=args.force, model_version=args.model_version)
@@ -185,6 +216,10 @@ def main() -> int:
             "  ⚠ MODEL_VERSION directory not found under models/. Train a "
             "model with `uv run triage-ml-train` before bringing up the overlay.",
         )
+    if not args.no_symlink:
+        symlink = _ensure_infra_symlink(ENV_FILE)
+        if symlink is not None:
+            print(f"wrote {symlink} -> ../.env (so docker compose finds it automatically)")
     return 0
 
 

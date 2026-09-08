@@ -69,6 +69,8 @@ docker compose down
 > **Variante ONNX (Fase 2)**: para comparar latência sklearn vs ONNX, suba também `api-onnx` via `infra/docker-compose.yml` e flip a variável `TRIAGE_ML_MODEL_VARIANT` no `api-prod` ou passe `?variant=onnx` no `POST /reload`. Detalhes completos em [GUIA-PROMETHEUS-GRAFANA.md](./GUIA-PROMETHEUS-GRAFANA.md).
 >
 > **Armadilha frequente: `cat > .env <<EOF ... EOF` no shell.** Em alguns shells interativos o heredoc termina na primeira `EOF` solta, e o `docker compose` reclama `required variable X is missing a value`. Use sempre o helper [`scripts/bootstrap_observability_overlay.py`](../../scripts/bootstrap_observability_overlay.py).
+>
+> **Segunda armadilha: `docker compose` procura o `.env` no diretório do compose file.** O helper já cuida disso criando `infra/.env -> ../.env` automaticamente.
 
 ### API de desenvolvimento via uvicorn
 

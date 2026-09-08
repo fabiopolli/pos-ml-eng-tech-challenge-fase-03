@@ -15,6 +15,11 @@ venv/
 .env.*
 !.env.example
 
+# Symlink created by scripts/bootstrap_observability_overlay.py so that
+# ``docker compose -f infra/docker-compose.yml`` finds the .env at the
+# repo root automatically. Regenerated locally by the helper.
+infra/.env
+
 # Data and model artifacts
 data/*.csv
 data/.~lock.*#

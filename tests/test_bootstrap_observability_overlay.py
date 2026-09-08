@@ -107,3 +107,43 @@ def test_helper_detects_latest_model_version(env_file_cleanup: Path) -> None:
         assert "MODEL_VERSION=20990101T000000Z-aaaaaaaaaaaa" in contents, contents
     finally:
         sentinel.rmdir()
+
+
+def test_helper_creates_infra_symlink(env_file_cleanup: Path) -> None:
+    """Bootstrap should create ``infra/.env -> ../.env`` so the overlay finds it."""
+    if not shutil.which("docker"):
+        pytest.skip("docker not available")
+    infra_env = REPO_ROOT / "infra" / ".env"
+    if infra_env.is_symlink() or infra_env.exists():
+        infra_env.unlink()
+    try:
+        result = _run_helper(model_version="20260101T000000Z-0123456789ab")
+        assert result.returncode == 0, result.stderr
+        assert infra_env.is_symlink(), f"expected symlink at {infra_env}"
+        assert infra_env.resolve() == env_file_cleanup.resolve(), (
+            "infra/.env should resolve to .env at repo root"
+        )
+
+        # End-to-end: ``docker compose -f infra/docker-compose.yml config``
+        # (no --env-file, no --project-directory) must now succeed because
+        # docker compose looks for .env next to the compose file.
+        compose_result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(COMPOSE),
+                "config",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=REPO_ROOT,
+        )
+        assert compose_result.returncode == 0, (
+            f"docker compose config failed: {compose_result.stderr}"
+        )
+        assert "required variable" not in compose_result.stderr, compose_result.stderr
+    finally:
+        if infra_env.is_symlink() or infra_env.exists():
+            infra_env.unlink()

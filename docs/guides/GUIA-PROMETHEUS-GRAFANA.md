@@ -61,6 +61,8 @@ docker compose -f infra/docker-compose.yml down
 > **Por que dois containers da API?** Para isolar a comparação de latência sklearn vs ONNX no mesmo probe de carga, sem precisar de flags na API de produção. `api-sklearn` mantém `TRIAGE_ML_MODEL_VARIANT=sklearn` (default) e `api-onnx` fixa `TRIAGE_ML_MODEL_VARIANT=onnx`.
 >
 > **Armadilha frequente: `cat > .env <<EOF ... EOF` no shell.** Em alguns shells interativos o heredoc termina assim que você digita a primeira `EOF` solta, e o comando subsequente (`docker compose up`) lê um `.env` truncado. O `docker compose` então reclama `required variable MODEL_VERSION is missing a value`. Use sempre o helper [`scripts/bootstrap_observability_overlay.py`](../../scripts/bootstrap_observability_overlay.py) que escreve o arquivo de forma atômica e detecta automaticamente a versão do modelo em `models/`.
+>
+> **Segunda armadilha: `docker compose` procura o `.env` no diretório do compose file.** Quando você roda `docker compose -f infra/docker-compose.yml up`, o `docker compose` procura `infra/.env` (não `<repo>/.env`) por padrão. O helper resolve isso criando um symlink `infra/.env -> ../.env` automaticamente. O symlink é regenerado a cada invocação do helper e está listado no `.gitignore`.
 
 ## Métricas expostas
 
