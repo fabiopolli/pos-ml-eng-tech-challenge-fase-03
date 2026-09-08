@@ -465,4 +465,7 @@ Leia [`docs/WORKFLOW_AGENTICO.md`](docs/WORKFLOW_AGENTICO.md). Em resumo, identi
 - [`docs/adr/README.md`](docs/adr/README.md): decisões arquiteturais (0001 dataset, 0003 sample-size).
 - [`.agents/contracts/README.md`](.agents/contracts/README.md): contratos entre os componentes.
 - [`docs/guides/GUIA-USO-FRONTS.md`](docs/guides/GUIA-USO-FRONTS.md): cenários completos do portal e dashboard técnico.
+- [`docs/guides/GUIA-USO-API.md`](docs/guides/GUIA-USO-API.md): uso detalhado da API oficial e da API de desenvolvimento (endpoints, RBAC, política de idioma, troubleshooting).
+- [`docs/guides/GUIA-TREINAMENTO.md`](docs/guides/GUIA-TREINAMENTO.md): ciclo completo de treinamento (preparação → CV → serialização imutável → export ONNX → integração com a API).
+- [`docs/guides/GUIA-PROMETHEUS-GRAFANA.md`](docs/guides/GUIA-PROMETHEUS-GRAFANA.md): stack de observabilidade (overlay Compose, métricas, PromQL, painéis do dashboard, troubleshooting).
 - [`docs/reports/`](docs/reports/): relatórios individuais por etapa (1-7) + [Análise dos aceites das Etapas 5 e 6](./docs/reports/Analise_aceites_Etapas_5_e_6.md).
