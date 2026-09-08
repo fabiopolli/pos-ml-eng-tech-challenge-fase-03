@@ -108,5 +108,5 @@ declarar explicitamente `target ∈ {1..5}` para evitar acoplamento oculto.
 - [`tests/test_data_preparation.py`](../../tests/test_data_preparation.py) —
   cobertura de conflito, duplicatas, equivalência Unicode/case, parâmetros
   inválidos e leakage.
-- [`docs/reports/Etapa_1_Fundação_ dados_e_contratos.md`](../reports/Etapa_1_Fundação_%20dados_e_contratos.md) —
+- [`docs/reports/Etapa_1_Fundacao_dados_e_contratos.md`](../reports/Etapa_1_Fundacao_dados_e_contratos.md) —
   relatório de implementação da Etapa 1.

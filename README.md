@@ -2,26 +2,49 @@
 
 Sistema de triagem automática de textos médicos, construído como um classificador NLP leve e servido por uma API REST. O projeto reúne treinamento e otimização do modelo, CI/CD, retreino orquestrado, observabilidade e uma proposta de implantação em nuvem.
 
-> Status: fundação, modelo baseline, API oficial, Airflow e Etapa 4 de CI/CD concluídos.
-> API, portal por papel e dashboard técnico foram validados em Docker local e no GitHub
-> Actions.
-> Otimização ONNX e observabilidade (Prometheus + Grafana) entregues (Fase 2 — Etapas 5 e 6).
-> Arquitetura em nuvem e vídeo STAR continuam em desenvolvimento.
+> **Status:** Etapas 1-7 concluídas. Otimização ONNX e observabilidade (Prometheus + Grafana) entregues (Fase 2 — Etapas 5 e 6). Arquitetura em nuvem (Etapa 8) e vídeo STAR continuam em desenvolvimento por Romário.
 
 ## Equipe e responsabilidades
 
 | Integrante | Responsabilidades principais |
 |---|---|
-| Fábio Polli | Repositório e arquitetura inicial; CI/CD, Docker e testes; documentação detalhada |
-| Denis Melo | EDA e seleção do dataset; DAG funcional do Airflow |
-| Will (Bill) | Classificador de texto; otimização de latência; métricas Prometheus/Grafana |
-| Romário | API FastAPI; arquitetura em nuvem; vídeo STAR |
+| Fábio Polli | Repositório e arquitetura inicial; CI/CD (`infra/`, `.github/`, `Dockerfile`), Docker e testes; documentação detalhada |
+| Denis Melo | EDA e seleção do dataset (Etapa 1); DAG funcional do Airflow (Etapa 7) |
+| Bill | Classificador de texto (Etapa 2); API de desenvolvimento; otimização ONNX (Etapa 5); métricas Prometheus/Grafana (Etapa 6); revisões cruzadas de todas as Etapas 1-7 |
+| Romário | API FastAPI oficial (Etapa 3); arquitetura em nuvem; vídeo STAR |
 
 As responsabilidades indicam liderança, não trabalho isolado. Mudanças nos contratos entre dados, modelo, API e infraestrutura devem ser revisadas por quem consome o contrato.
 
+## Status consolidado por etapa
+
+| Etapa | Tema | Responsável | Período | Status | Relatório |
+|---:|---|---|---|---|---|
+| 1 | Fundação, dados e contratos (dataset, EDA, schema) | Denis | 2026-08-23 a 2026-09-07 | ✅ concluída | [Etapa_1](./docs/reports/Etapa_1_Fundacao_dados_e_contratos.md) |
+| 2 | Modelo baseline + serialização + API de desenvolvimento | Bill | 2026-08-23 a 2026-09-07 | ✅ concluída | [Etapa_2](./docs/reports/Etapa_2_Modelo_baseline_e_serialização.md) |
+| 3 | API FastAPI oficial com RBAC | Romário | 2026-08-30 a 2026-09-07 | ✅ concluída | [Etapa_3](./docs/reports/Etapa_3_API_oficial.md) |
+| 4 | CI/CD, Docker multi-stage e Playwright | Fábio | 2026-09-05 a 2026-09-07 | ✅ concluída (PR #5 verde) | [Etapa_4](./docs/reports/Etapa_4_CI_CD_Docker.md) |
+| 5 | Otimização ONNX + DAG de retraining (`skl2onnx` opset 17) | Bill | 2026-09-07 a 2026-09-08 | ✅ concluída | [Etapa_5](./docs/reports/Etapa_5_Otimizacao_do_modelo.md) |
+| 6 | Observabilidade Prometheus/Grafana + política de privacidade | Bill | 2026-09-08 | ✅ concluída | [Etapa_6](./docs/reports/Etapa_6_Observabilidade_Prometheus_Grafana.md) |
+| 7 | DAG Airflow de retraining com DagsHub | Denis | 2026-09-04 a 2026-09-07 | ✅ concluída (idempotência validada) | [Etapa_7](./docs/reports/Etapa_7_Orquestração_de_retreino.md) |
+| 8 | Arquitetura em nuvem + vídeo STAR | Romário | pendente | ⏳ em aberto | (a publicar) |
+
+Aceite oficial (20% oficial = Etapa 2 + Etapa 5; 15% oficial = Etapa 4 + Etapa 7): **100% fechado**. Análise cruzada item-por-item dos aceites das Etapas 5 e 6 em [Analise_aceites_Etapas_5_e_6.md](./docs/reports/Analise_aceites_Etapas_5_e_6.md).
+
+### Revisão cruzada aplicada em 2026-09-07/08
+
+Após a implementação inicial, Bill executou **dois ciclos** de revisão estática cruzada com cross-validação por dois sub-agentes em todas as Etapas 1-7. Cada relatório individual de etapa traz a lista consolidada das correções aplicadas; o resumo de alto nível:
+
+- **Etapa 1**: `df.head(3)` removido do notebook EDA (vazava 3 abstracts); ADR 0001 criado; contrato de dados explicitado em `.agents/contracts/README.md`.
+- **Etapa 2**: leitura direta de `metrics` no dashboard; `load_artifact` detecta parâmetros declarados ausentes; `language_config_incompatible` adicionado ao allow-list; `std_macro_f1` validado com limite superior; re-exports estáveis em `triage_ml.models`.
+- **Etapa 3**: `format_exc_info` em structlog; allow-list de `error_code`; `validation_failed` padronizado; `_request_id_for` retorna `None` em vez de `"unknown"`; `predict_latency_ms` separado de `detect`; HMAC-SHA-256 para fingerprint de API key; `RequireRole.allowed_roles` agora `frozenset`.
+- **Etapa 4**: `dashboard-dev` desacoplado em `profiles: [dev]` com chaves dedicadas; `hmac.compare_digest` em `fake_api.py`; `trap cleanup EXIT` no job `front-e2e`; readiness loop corrigido.
+- **Etapa 5**: `OnnxModelAdapter.__call__` emite 1 `session.run` (antes eram 2); `ModelHolder._onnx_predictor = None` dentro de `self._lock`; `_load_onnx` defensivo contra classes ausentes; `_slice_identity_fields` exige `selected_classifier` explícito; `export_onnx_for_version` com `reused=True` por checksum; `validate_variant_metadata` ruidoso em vez de silencioso.
+- **Etapa 6**: `_METRIC_ERROR_CODES` derivado de `ALLOWED_ERROR_CODES | LANGUAGE_ERROR_CODES | {"request_failed"}` (`internal_error` deliberadamente fora — não vaza como label Prometheus).
+- **Etapa 7**: `_git_environment()` substitui `os.environ.copy()` (evita herdar segredos do worker para o subprocess do git); `_run_git` sanitiza credenciais via regex; `validate_dataset_file` lê `sample_size`/`random_state` do YAML e limita 200 MiB; `_ensure_no_symlink_ancestor` recusa publicação via symlink; `_atomic_write_json` (tempfile + `os.replace`).
+
 ## Objetivo e critérios oficiais
 
-O cenário é um hospital que precisa classificar textos médicos por urgência. A solução deve incluir:
+O cenário é um hospital que precisa classificar textos médicos por urgência. A solução inclui:
 
 - dataset público tabular com uma coluna de texto, uma coluna target e pelo menos 2.000 amostras;
 - classificador NLP leve e ao menos uma técnica de otimização de latência;
@@ -56,15 +79,14 @@ A direção inicial é inferência **real-time**, mantendo batch para ingestão,
 
 ## Dataset e idioma
 
-Denis avaliará inicialmente:
+Denis avaliou inicialmente:
 
 1. [Medical Abstracts TC Corpus](https://www.kaggle.com/datasets/saharalaa/medical-abstracts-tc-corpus/data?select=medical_tc_train.csv)
 2. [MIMIC-III Clinical Database - Open Access](https://www.kaggle.com/datasets/ihssanened/mimic-iii-clinical-databaseopen-access)
 
-Contrato: recorte reproduzível entre 2.000 e 5.000 registros, colunas `text` e `target`,
-sem duplicatas exatas ou leakage entre treino e teste. A decisão, a licença e o procedimento
-de preparação estão em [docs/dataset.md](docs/dataset.md). Dados brutos, processados e
-artefatos binários não devem ser enviados ao Git.
+Decisão registrada como ADR 0001: **Medical Abstracts TC Corpus** (CC BY-SA 3.0), com cinco categorias clínicas (`target ∈ {1..5}`). MIMIC-III foi descartado por exigir treinamento obrigatório, derivação de labels e ter maior risco de privacidade. Detalhes completos em [`docs/adr/0001-escolha-recorte-dataset.md`](docs/adr/0001-escolha-recorte-dataset.md) e em [`docs/dataset.md`](docs/dataset.md).
+
+Contrato: recorte reproduzível entre 2.000 e 5.000 registros (com `dataset_sizing: [5000, 10000, 14000]` no `configs/training.yaml` para a Etapa 5/6 da Fase 2 — vide ADR 0003), colunas `text` e `target`, sem duplicatas exatas ou leakage entre treino e teste. Dados brutos, processados e artefatos binários não devem ser enviados ao Git.
 
 Como os candidatos estão em inglês, a recomendação inicial é manter a inferência sem tradução online. Para não correr riscos de LGPD ou de latência em dados clínicos sensíveis, a API ganhou uma **checagem de idioma local** com `langid` que rejeita preventivamente qualquer texto fora do allow-list `{"en"}` antes do modelo ser invocado. Mais detalhes na seção "Modelo (Bill)".
 
@@ -77,7 +99,7 @@ Como os candidatos estão em inglês, a recomendação inicial é manter a infer
 |-- airflow/dags/            # DAGs de treino e retreino
 |-- configs/                 # Configurações versionadas
 |-- data/{raw,processed}/    # Dados locais, fora do Git
-|-- docs/                    # Checklist, workflow, ADRs e documentação
+|-- docs/                    # Checklist, workflow, ADRs, guides e relatórios
 |-- infra/                   # Proposta e código de infraestrutura
 |-- models/                  # Artefatos locais, fora do Git
 |-- monitoring/              # Prometheus e provisionamento do Grafana
@@ -92,45 +114,29 @@ Os diretórios reservados contêm arquivos explicativos. Código reutilizável d
 
 ## Início rápido
 
-Pré-requisitos: Python 3.12 e [`uv`](https://docs.astral.sh/uv/).
+Pré-requisitos: Python 3.12 e [`uv`](https://docs.astral.sh/uv/). Para a Etapa 5/6 (otimização + observabilidade), opcionalmente instale o extra `[observability,optimization]`.
 
 ```bash
-uv sync --dev
+uv sync --dev --extra observability --extra optimization
 uv run ruff check .
 uv run pytest
 ```
 
 Para executar a plataforma, consulte [Plataforma local em Docker](#plataforma-local-em-docker).
 O Airflow possui instruções próprias em [`airflow/dags/README.md`](airflow/dags/README.md).
-A stack de otimização e observabilidade (Fase 2) tem overlay próprio em
-[`infra/docker-compose.yml`](infra/docker-compose.yml) e usa o target
-`runtime-observability` do `Dockerfile` (com `[observability,optimization]` extras).
+A stack de otimização e observabilidade (Fase 2) tem overlay próprio em [`infra/docker-compose.yml`](infra/docker-compose.yml) e usa o target `runtime-observability` do `Dockerfile`.
 
 ### Otimização e observabilidade (Fase 2 — Etapas 5 e 6)
 
-A nova DAG [`triage_ml_retraining_optimization`](airflow/dags/triage_retraining_optimization.py)
-reaproveita o pipeline de ingestão, validação e treino da Etapa 7 e itera sobre o catálogo
-`dataset_sizing: [5000, 10000, 14000]` definido em [`configs/training.yaml`](configs/training.yaml)
-(sobrescrevível em runtime via `TRIAGE_DATASET_SLICES`). Para cada slice, a DAG exporta o
-artefato sklearn em [`model.onnx`](src/triage_ml/optimization/optimize.py), publica os checksums
-em `metadata.json` e grava `reports/benchmarks/benchmark.json` comparando sklearn vs ONNX no
-mesmo probe (workload documentado em [`benchmark.py`](src/triage_ml/optimization/benchmark.py)).
+A nova DAG [`triage_ml_retraining_optimization`](airflow/dags/triage_retraining_optimization.py) reaproveita o pipeline de ingestão, validação e treino da Etapa 7 e itera sobre o catálogo `dataset_sizing: [5000, 10000, 14000]` definido em [`configs/training.yaml`](configs/training.yaml) (sobrescrevível em runtime via `TRIAGE_DATASET_SLICES`). Para cada slice, a DAG exporta o artefato sklearn em [`model.onnx`](src/triage_ml/optimization/optimize.py), publica os checksums em `metadata.json` e grava `reports/benchmarks/benchmark.json` comparando sklearn vs ONNX no mesmo probe (workload documentado em [`benchmark.py`](src/triage_ml/optimization/benchmark.py)).
 
 A API oficial ganhou:
 
 - `GET /metrics` — saída `prometheus_client`, pública nesta fase (revisitar na Etapa 8).
-- `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` — alterna o pipeline carregado pelo
-  [`registry`](src/triage_ml/optimization/registry.py). Padrão `sklearn` para preservar o
-  deploy atual; `onnx` requer que o `model.onnx` exista ao lado do `model.joblib`.
-- O adapter ONNX implementa `predict`/`predict_proba` e cai para `decision_function` quando o
-  classificador é `LinearSVC` (sem superfície probabilística calibrada — ver ADR 0003).
+- `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` — alterna o pipeline carregado pelo [`registry`](src/triage_ml/optimization/registry.py). Padrão `sklearn` para preservar o deploy atual; `onnx` requer que o `model.onnx` exista ao lado do `model.joblib`.
+- O adapter ONNX implementa `predict`/`predict_proba` e cai para `decision_function` quando o classificador é `LinearSVC` (sem superfície probabilística calibrada — ver ADR 0003).
 
-A stack overlay `infra/docker-compose.yml` sobe `api-sklearn`, `api-onnx`, Prometheus e
-Grafana em uma rede privada; o dashboard Grafana (provisionado em
-[`monitoring/grafana/dashboards/triage_ml.json`](monitoring/grafana/dashboards/triage_ml.json))
-compara latência, taxa de erro e throughput por `model_variant`. O script
-[`generate_observability_traffic.py`](scripts/generate_observability_traffic.py) gera carga
-sintética benigna para popular os painéis sem precisar de payload clínico.
+A stack overlay `infra/docker-compose.yml` sobe `api-sklearn`, `api-onnx`, Prometheus e Grafana em uma rede privada; o dashboard Grafana (provisionado em [`monitoring/grafana/dashboards/triage_ml.json`](monitoring/grafana/dashboards/triage_ml.json)) compara latência, taxa de erro e throughput por `model_variant`. O script [`generate_observability_traffic.py`](scripts/generate_observability_traffic.py) gera carga sintética benigna para popular os painéis sem precisar de payload clínico. As versões físicas do dashboard ficam em [`reports/figures/triage_ml_dashboard.{json,png}`](reports/figures/) (renderizadas por [`scripts/render_observability_dashboard.py`](scripts/render_observability_dashboard.py)).
 
 ```bash
 # Subir a stack overlay (Prometheus + Grafana + duas variantes da API)
@@ -148,30 +154,78 @@ uv run python scripts/generate_observability_traffic.py \
 docker compose -f infra/docker-compose.yml down
 ```
 
-Política de privacidade: o `text` é classificado e descartado, nunca persistido,
-nunca copiado para log, nunca copiado para label de métrica, nunca retornado em erro. As
-labels Prometheus permitidas são `route`, `method`, `status`, `model_variant`,
-`error_code` (ver [`tests/test_observability_privacy.py`](tests/test_observability_privacy.py)).
+Política de privacidade: o `text` é classificado e descartado, nunca persistido, nunca copiado para log, nunca copiado para label de métrica, nunca retornado em erro. As labels Prometheus permitidas são `route`, `method`, `status`, `model_variant`, `error_code` (ver [`tests/test_observability_privacy.py`](tests/test_observability_privacy.py)).
 
-## Checklist resumido
+## Resumo por etapa
 
-- [x] Criar repositório e definir arquitetura inicial — Fábio
-- [x] Executar EDA e escolher dataset entre 2.000 e 5.000 registros — Denis
-- [x] Treinar classificador de texto (baseline TF-IDF + classificador linear) — Bill
-- [x] Construir API FastAPI — Romário; imagem Docker da API oficial validada por Fábio
-- [x] Configurar CI/CD, Docker e testes — Fábio (API e dois fronts validados localmente;
-  workflow remoto verde no PR #5)
-- [x] Implementar DAG Airflow funcional — Denis (execução completa e idempotência
-  validadas em Docker contra o DagsHub)
-- [x] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill (variante ONNX
-  exportada, comparativo sklearn vs ONNX, /metrics na API oficial, dashboard Grafana)
-- [ ] Documentar arquitetura em nuvem — Romário
-- [~] Manter documentação detalhada — Fábio (documento vivo)
-- [ ] Gravar vídeo STAR de até cinco minutos — Romário
+### Etapa 1 — Fundação, dados e contratos (Denis)
+
+- **Dataset**: [Medical Abstracts TC Corpus](https://github.com/sebischair/Medical-Abstracts-TC-Corpus) (CC BY-SA 3.0); cinco categorias clínicas (`target ∈ {1..5}`); decisão em [ADR 0001](docs/adr/0001-escolha-recorte-dataset.md).
+- **Pipeline de preparação** (`src/triage_ml/data/prepare.py`): canonicização, validação de tipos e da faixa, deduplicação NFKC + casefold, amostragem estratificada e ordenação determinística. Toda execução devolve um `PreparationReport` com contagens verificáveis.
+- **Recorte**: 11.550 linhas → 7.489 elegíveis → 5.000 preparadas → 4.000 treino / 1.000 teste (80/20, seed 42) sem leakage.
+- **EDA**: [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) (9 figuras em `reports/figures/`); nenhum abstract impresso desde a revisão de 2026-09-07.
+- **Detalhes**: [Etapa_1](./docs/reports/Etapa_1_Fundacao_dados_e_contratos.md).
+
+### Etapa 2 — Modelo baseline + serialização + API de desenvolvimento (Bill)
+
+- **Modelo**: TF-IDF (1-2 gramas, min_df=2, max_df=0.95, sublinear_tf) + **LinearSVC** (`class_weight="balanced"`); seleção por macro-F1 em CV estratificada 5-fold somente no treino (LinearSVC `0.7335` vs LogisticRegression `0.7319`).
+- **Métricas no teste**: accuracy `0.7460`, balanced_accuracy `0.7221`, macro-F1 `0.7296`, weighted-F1 `0.7438`.
+- **Serialização**: diretórios imutáveis `YYYYMMDDTHHMMSSZ-<input_hash>` com `model.joblib` + `metadata.json` validado por `schema_version: 1` (checksum SHA-256, fingerprints, label mapping, métricas, dependências e seleção).
+- **API de desenvolvimento** (`src/triage_ml/dev_api/`): `GET /health`, `GET /model-info`, `GET /models`, `POST /reload`, `POST /predict` consumindo o modelo real; erros sanitizados; `latency_ms`, `request_id`, `X-Request-ID`, `Server-Timing`.
+- **Política de idioma** (`langid` local): allow-list `{"en"}`; rejeita texto curto, score baixo e idioma fora do allow-list; erros nunca carregam `text`.
+- **Detalhes**: [Etapa_2](./docs/reports/Etapa_2_Modelo_baseline_e_serialização.md).
+
+### Etapa 3 — API FastAPI oficial (Romário)
+
+- **API oficial** (`src/triage_ml/api/`): herda o contrato da dev_api; adiciona RBAC estático (`doctor`, `patient`, `service`), rate limit por IP + fingerprint HMAC-SHA-256 da chave (sal aleatório 32 bytes), middleware com `request_id`, `X-Request-ID`, `Server-Timing: total;dur=, detect;dur=, predict;dur=`, logs JSON sanitizados.
+- **Baseline HTTP** local: média `22,18 ms`, p95 `31,88 ms`, p99 `32,80 ms` (artefato `20260905T171611Z-f2cb6f23f9cd`).
+- **Portal Streamlit** (`front/app_prod.py`): telas distintas de médico e paciente; nunca chama `/predict` na sessão de paciente; nunca renderiza body bruto de erro da API.
+- **RBAC**: `/predict` restrito a `doctor`; `/model-info` e `/models` restritos a `service` ou `doctor`; `/reload` restrito a `service`; paciente recebe `403` sem classificação clínica.
+- **Detalhes**: [Etapa_3](./docs/reports/Etapa_3_API_oficial.md).
+
+### Etapa 4 — CI/CD, Docker e testes (Fábio)
+
+- **Imagens multi-stage** Python 3.12 reproduzíveis a partir de `uv.lock`; pinagem de NumPy, SciPy, scikit-learn, joblib.
+- **Hardening**: usuário não-root (`uid=10001`), healthcheck HTTP sem `curl`, `/models` somente leitura, `/tmp` limitado, `cap_drop: ALL`, `no-new-privileges`.
+- **Compose** com `api-prod`, `portal-prod`, `dashboard-dev` (este em `profiles: [dev]` com chaves dedicadas `TRIAGE_ML_DEV_API_KEY_*`).
+- **CI** (`quality` + `front-e2e` + `container`): lockfile, formatação, lint, pytest, Playwright Chromium, build/auditoria das três imagens. PR #5 verde no GitHub Actions.
+- **Airflow overlay** (`docker-compose.airflow.yml`): entrypoint valida `TRIAGE_REQUIRE_AUTH=true` antes do `airflow standalone`.
+- **Detalhes**: [Etapa_4](./docs/reports/Etapa_4_CI_CD_Docker.md).
+
+### Etapa 5 — Otimização do modelo (Bill)
+
+- **ONNX export** via `skl2onnx.convert_sklearn` (opset 17, `zipmap=False`) ao lado do `model.joblib`.
+- **`OnnxModelAdapter`** com singleton `InferenceSession`; `__call__(texts)` emite 1 única `session.run` e devolve `(labels, proba, kinds)`; `_resolve_label_index` cobre `decision_function` do LinearSVC.
+- **Benchmark controlado** (`benchmark.py`): `batch=1`, `repetitions=50`, `warmup=5`; `EnvironmentFingerprint` (Python + platform + cpu_count + versões) para reprodutibilidade; p50/p95/p99 + macro-F1 + class_agreement.
+- **DAG `triage_ml_retraining_optimization`**: gated por `TRIAGE_OPTIMIZATION_ENABLED=false` (default) para preservar o stack da Etapa 7; helpers idempotentes em `airflow_pipeline.py`.
+- **Variante na API**: `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` resolvido em `app.state.model_variant` (single source of truth via `lifespan`); `/predict` ONNX com `__call__` único.
+- **Detalhes**: [Etapa_5](./docs/reports/Etapa_5_Otimizacao_do_modelo.md).
+
+### Etapa 6 — Observabilidade Prometheus/Grafana (Bill)
+
+- **Middleware** `PrometheusMiddleware` route-aware (templates `path → /predict|/reload|/health|/model-info|/models|/metrics|/"`).
+- **Métricas** em `CollectorRegistry` privado (não vaza do global):
+  - `triage_ml_requests_total{route, method, status, model_variant}`
+  - `triage_ml_request_latency_seconds{...}` (histograma, buckets 0.005..2.5 s)
+  - `triage_ml_prediction_errors_total{route, error_code, model_variant}` (allow-list público)
+- **Allow-list de labels**: `route`, `method`, `status`, `model_variant`, `error_code` (+ `le` reservado para buckets). `text`, `label_name`, `request_id` jamais viram label.
+- **Privacidade**: canário `PRIVACY-CANARY-CARDIOVASCULAR-RESPIRATORY...` varrido em `/metrics`, body de `/predict`, logs capturados.
+- **Dashboard** 4 painéis: `Requests by route/status`, `Latency p95` por `model_variant`, `Prediction error rate`, `Baseline vs optimized (p95)` (tabela p50/p95/p99).
+- **Artefatos físicos**: `reports/figures/triage_ml_dashboard.{json,png}` (gerados por `scripts/render_observability_dashboard.py`).
+- **Detalhes**: [Etapa_6](./docs/reports/Etapa_6_Observabilidade_Prometheus_Grafana.md).
+
+### Etapa 7 — Orquestração de retraining (Denis)
+
+- **DAG `triage_ml_retraining`**: `schedule=None`, `catchup=False`, `max_active_runs=1`; tasks `ingest` → `validate` → `train` → `verify`.
+- **Ingestão privada** de segredos: `_git_environment()` monta env mínimo (`PATH`, `LC_ALL`, `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS_REQUIRE=force`, mais `GIT_ASKPASS`, `DAGSHUB_USERNAME`, `DAGSHUB_USER_TOKEN` quando há credenciais); `_redact_credentials` mascara vazamentos em stderr/stdout.
+- **Idempotência**: `find_reusable_artifact` reusa versões por `(dataset_sha256, config_file_sha256)`; `train_evaluate_persist` grava `airflow_run.json` com `_atomic_write_json`.
+- **Defesa contra symlink**: `_ensure_no_symlink_ancestor` recusa publicação via symlink.
+- **Validação alinhada ao YAML**: `validate_dataset_file` lê `sample_size`/`random_state` de `configs/training.yaml` quando não fornecidos; rejeita datasets > 200 MiB.
+- **Contêiner**: `apache/airflow:3.1.7-python3.12`, entrypoint `airflow/entrypoint.sh` validando `TRIAGE_REQUIRE_AUTH=true` + credenciais DagsHub.
+- **Execução real** 2026-09-05 contra `069dc330e8f5c478a82c893cc224d63734781f6f` da main do DagsHub: 11.550 linhas → 7.489 elegíveis → 5.000 preparadas; artefato `20260905T171611Z-f2cb6f23f9cd` com `accuracy=0.7520`, `balanced_accuracy=0.7281`, `macro_f1=0.7335`; segunda execução confirmada com `reused=true`.
+- **Detalhes**: [Etapa_7](./docs/reports/Etapa_7_Orquestração_de_retreino.md).
 
 ## Modelo (Bill)
-
-Esta seção documenta a entrega do classificador NLP leve do projeto.
 
 ### O que o modelo faz
 
@@ -206,8 +260,7 @@ macro_f1=0.7296
 weighted_f1=0.7438
 ```
 
-Figuras existentes em `reports/figures/` e novas execuções versionadas em
-`reports/figures/<model_version>/`:
+Figuras existentes em `reports/figures/` e novas execuções versionadas em `reports/figures/<model_version>/`:
 
 - `08_confusion_matrix_linear_svc.png` — matriz de confusão do modelo selecionado no split de teste.
 - `08_top_features_linear_svc.png` — top-12 coeficientes por classe.
@@ -283,8 +336,8 @@ Para testar a API manualmente sem `curl` na mão, há um dashboard Streamlit em 
 **Sidebar:**
 
 - **Conexão** — URL base da API + botão "Atualizar health".
-- **🔁 Trocar modelo** — consome `GET /models` para listar versões válidas, mostra a versão em uso e dispara `POST /reload`. O picker fica na sessão Streamlit; o reload altera globalmente o processo da API e deve ser usado apenas no ambiente local de desenvolvimento.
-- **🧠 Modelo** — consome `GET /model-info` e exibe, em expanders, a identidade do artefato carregado (`model_version`, `model_name`, `task_type`, `language`), dados de treinamento (`n_train`, `n_test`, `random_state`, `git_commit`, `created_at`, `dependency_versions`), a seleção do classificador (candidatos `logreg` × `linear_svc` com `mean_macro_f1 ± std`) e as métricas (`accuracy`, `balanced_accuracy`, `macro_f1`, `weighted_f1` globais + tabela per-classe com precision/recall/F1/support).
+- **�� Trocar modelo** — consome `GET /models` para listar versões válidas, mostra a versão em uso e dispara `POST /reload`. O picker fica na sessão Streamlit; o reload altera globalmente o processo da API e deve ser usado apenas no ambiente local de desenvolvimento.
+- **�� Modelo** — consome `GET /model-info` e exibe, em expanders, a identidade do artefato carregado (`model_version`, `model_name`, `task_type`, `language`), dados de treinamento (`n_train`, `n_test`, `random_state`, `git_commit`, `created_at`, `dependency_versions`), a seleção do classificador (candidatos `logreg` × `linear_svc` com `mean_macro_f1 ± std`) e as métricas (`accuracy`, `balanced_accuracy`, `macro_f1`, `weighted_f1` globais + tabela per-classe com precision/recall/F1/support).
 
 ```bash
 # 1. Suba a API em outro terminal
@@ -306,22 +359,17 @@ uv run ruff format --check .  # verificação de formatação
 
 ## Plataforma local em Docker
 
-Pré-requisitos: Docker Desktop em execução, um artefato válido sob `models/<versao>/`
-e um arquivo `.env` local. A stack principal possui:
+Pré-requisitos: Docker Desktop em execução, um artefato válido sob `models/<versao>/` e um arquivo `.env` local. A stack principal possui:
 
 | Serviço | Porta padrão | Finalidade |
 |---|---:|---|
 | `api-prod` | 8000 | API FastAPI e inferência com o modelo real |
 | `portal-prod` | 8501 | front do Romário, com login médico/paciente |
-| `dashboard-dev` | 8502 | front técnico do Bill, com health, modelo e testes manuais |
+| `dashboard-dev` | 8502 | front técnico do Bill, com health, modelo e testes manuais (perfil `dev`, chaves dedicadas) |
 
-O Airflow permanece isolado em `docker-compose.airflow.yml`, na porta 8080, para que
-retreino e inferência possam ser iniciados ou encerrados independentemente.
+O Airflow permanece isolado em `docker-compose.airflow.yml`, na porta 8080, para que retreino e inferência possam ser iniciados ou encerrados independentemente.
 
-A imagem na raiz executa `triage_ml.api.app:app` com um worker, usuário não-root e
-healthcheck nativo. O modelo não entra na imagem: `models/` é montado somente para leitura.
-O Compose também remove capabilities Linux, bloqueia ganho de privilégios e deixa o
-filesystem do contêiner somente para leitura, com um `tmpfs` limitado em `/tmp`.
+A imagem na raiz executa `triage_ml.api.app:app` com um worker, usuário não-root e healthcheck nativo. O modelo não entra na imagem: `models/` é montado somente para leitura. O Compose também remove capabilities Linux, bloqueia ganho de privilégios e deixa o filesystem do contêiner somente para leitura, com um `tmpfs` limitado em `/tmp`.
 
 Antes da primeira execução, copie `.env.example` para `.env` e configure:
 
@@ -336,10 +384,7 @@ TRIAGE_ML_DASHBOARD_PATIENT_USERNAME=paciente-demo
 TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD=<outra-senha-local>
 ```
 
-`API_MODEL_PATH` usa o caminho **interno** do contêiner. As chaves do exemplo devem ser
-substituídas; `.env` é local e ignorado pelo Git. A aplicação lê somente variáveis de
-processo com prefixo `TRIAGE_ML_`; o Compose é responsável por selecionar o que sai do
-arquivo compartilhado `.env` e entra no serviço.
+`API_MODEL_PATH` usa o caminho **interno** do contêiner. As chaves do exemplo devem ser substituídas; `.env` é local e ignorado pelo Git. A aplicação lê somente variáveis de processo com prefixo `TRIAGE_ML_`; o Compose é responsável por selecionar o que sai do arquivo compartilhado `.env` e entra no serviço.
 
 ```bash
 docker compose up --build -d --wait api-prod portal-prod dashboard-dev
@@ -349,10 +394,7 @@ docker compose logs --tail=100 api-prod portal-prod dashboard-dev
 docker compose down
 ```
 
-Após o healthcheck, acesse a API em `http://localhost:8000`, o portal por papel em
-`http://localhost:8501` e o dashboard técnico em `http://localhost:8502`. Os três serviços
-usam a rede interna do Compose; somente os processos Streamlit recebem as chaves necessárias
-às suas funções, sempre no servidor e nunca incorporadas às imagens.
+Após o healthcheck, acesse a API em `http://localhost:8000`, o portal por papel em `http://localhost:8501` e o dashboard técnico em `http://localhost:8502`. Os três serviços usam a rede interna do Compose; somente os processos Streamlit recebem as chaves necessárias às suas funções, sempre no servidor e nunca incorporadas às imagens.
 
 ### Como usar os dois fronts
 
@@ -363,25 +405,15 @@ Os dashboards têm públicos diferentes e não são redundantes:
 | `front/app_prod.py` | `portal-prod` | demonstração para médico e paciente, com login e RBAC |
 | `front/app_dev.py` | `dashboard-dev` | validação técnica de health, modelo, idioma, predição e reload |
 
-No portal, a sessão de paciente percorre uma jornada informativa e não recebe classe, score
-ou diagnóstico automático. A sessão médica pode enviar um texto clínico sintético em inglês
-para apoio à triagem; a decisão final permanece humana. A chave médica fica no processo
-Streamlit e não é enviada ao navegador.
+No portal, a sessão de paciente percorre uma jornada informativa e não recebe classe, score ou diagnóstico automático. A sessão médica pode enviar um texto clínico sintético em inglês para apoio à triagem; a decisão final permanece humana. A chave médica fica no processo Streamlit e não é enviada ao navegador.
 
-No dashboard técnico, o avaliador pode inspecionar o artefato carregado, métricas, versões,
-política de idioma e respostas HTTP. O reload deve ser usado somente em ambiente local de
-desenvolvimento.
+No dashboard técnico, o avaliador pode inspecionar o artefato carregado, métricas, versões, política de idioma e respostas HTTP. O reload deve ser usado somente em ambiente local de desenvolvimento.
 
-Os cenários completos, credenciais demonstrativas e a sequência sugerida para o vídeo estão
-no [`Guia de uso dos fronts`](docs/guides/GUIA-USO-FRONTS.md).
+Os cenários completos, credenciais demonstrativas e a sequência sugerida para o vídeo estão no [`Guia de uso dos fronts`](docs/guides/GUIA-USO-FRONTS.md).
 
 ### Testes do front no CI
 
-O job `front-e2e` usa Playwright com Chromium e uma API determinística exclusiva de teste.
-Ele valida credenciais inválidas, login e logout, acesso médico e a jornada do paciente. O
-teste também comprova que a sessão do paciente produz zero chamadas a `POST /predict`.
-Em falhas, logs, screenshots e traces ficam disponíveis no artefato
-`front-e2e-evidence` do GitHub Actions por 14 dias.
+O job `front-e2e` usa Playwright com Chromium e uma API determinística exclusiva de teste. Ele valida credenciais inválidas, login e logout, acesso médico e a jornada do paciente. O teste também comprova que a sessão do paciente produz zero chamadas a `POST /predict`. Em falhas, logs, screenshots e traces ficam disponíveis no artefato `front-e2e-evidence` do GitHub Actions por 14 dias.
 
 Para executar os testes de navegador localmente:
 
@@ -391,43 +423,36 @@ uv run pytest tests/e2e -m e2e --browser chromium --output test-results/playwrig
   --screenshot only-on-failure --tracing retain-on-failure
 ```
 
-O teste local requer o portal e a API de teste iniciados conforme descrito no
-[`README dos fronts`](front/README.md#testes-de-navegador).
+O teste local requer o portal e a API de teste iniciados conforme descrito no [`README dos fronts`](front/README.md#testes-de-navegador).
 
 ### Quando o `.env` precisa do DagsHub
 
-Para executar apenas `api-prod`, `portal-prod` e `dashboard-dev`, **não é necessário**
-preencher `DAGSHUB_USERNAME` ou `DAGSHUB_USER_TOKEN`. O modelo já deve existir localmente em
-`models/<versao>/`, e somente `API_MODEL_PATH`, chaves da API e credenciais do portal são
-necessárias.
+Para executar apenas `api-prod`, `portal-prod` e `dashboard-dev`, **não é necessário** preencher `DAGSHUB_USERNAME` ou `DAGSHUB_USER_TOKEN`. O modelo já deve existir localmente em `models/<versao>/`, e somente `API_MODEL_PATH`, chaves da API e credenciais do portal são necessárias.
 
-As variáveis do DagsHub são exigidas apenas ao executar o Airflow com ingestão remota pelo
-`docker-compose.airflow.yml`. Use um token de leitura, nunca a senha da conta, e mantenha o
-`.env` fora do Git. Mesmo quando o repositório aparece como público, o endpoint Git do
-DagsHub pode solicitar autenticação.
+As variáveis do DagsHub são exigidas apenas ao executar o Airflow com ingestão remota pelo `docker-compose.airflow.yml`. Use um token de leitura, nunca a senha da conta, e mantenha o `.env` fora do Git. Mesmo quando o repositório aparece como público, o endpoint Git do DagsHub pode solicitar autenticação.
 
-O serviço falha rapidamente se faltar uma chave, se o modelo não existir ou se as versões
-de NumPy, SciPy e scikit-learn forem incompatíveis com o manifesto do artefato. Essas
-dependências ficam fixadas no `pyproject.toml` e no `uv.lock` para treino e inferência
-usarem o mesmo contrato de serialização.
+O serviço falha rapidamente se faltar uma chave, se o modelo não existir ou se as versões de NumPy, SciPy e scikit-learn forem incompatíveis com o manifesto do artefato. Essas dependências ficam fixadas no `pyproject.toml` e no `uv.lock` para treino e inferência usarem o mesmo contrato de serialização.
 
-No GitHub Actions, o job `quality` verifica lockfile, formato, lint, testes e pacote. Após
-ele passar, `front-e2e` valida o portal no Chromium e `container` constrói os targets da
-API, portal e dashboard, importa a aplicação ASGI e audita usuário e metadados das imagens.
-Modelos e segredos não são necessários nem incluídos nesse build. A execução remota nº 39
-foi concluída com sucesso no [PR #5](https://github.com/fabiopolli/pos-ml-eng-tech-challenge-fase-03/pull/5).
+No GitHub Actions, o job `quality` verifica lockfile, formato, lint, testes e pacote. Após ele passar, `front-e2e` valida o portal no Chromium e `container` constrói os targets da API, portal e dashboard, importa a aplicação ASGI e audita usuário e metadados das imagens. Modelos e segredos não são necessários nem incluídos nesse build. A execução remota nº 39 foi concluída com sucesso no [PR #5](https://github.com/fabiopolli/pos-ml-eng-tech-challenge-fase-03/pull/5).
 
-A validação detalhada das imagens está em
-[`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
-Os relatórios individuais das etapas concluídas estão em `docs/reports/`
-(`Etapa_1`, `Etapa_2`, `Etapa_3`, `Etapa_4`, `Etapa_7` e `Etapa_8`); o status consolidado
-e os itens pendentes (cloud, vídeo STAR) vivem em
-[`docs/reports/Etapa_8_Cloud_video_documentacao.md`](docs/reports/Etapa_8_Cloud_video_documentacao.md).
+A validação detalhada das imagens está em [`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
+
+Os relatórios individuais das etapas concluídas estão em `docs/reports/`:
+
+- [Etapa_1 — Fundação, dados e contratos](./docs/reports/Etapa_1_Fundacao_dados_e_contratos.md) (Denis)
+- [Etapa_2 — Modelo baseline e serialização](./docs/reports/Etapa_2_Modelo_baseline_e_serialização.md) (Bill)
+- [Etapa_3 — API oficial](./docs/reports/Etapa_3_API_oficial.md) (Romário)
+- [Etapa_4 — CI/CD, Docker e testes](./docs/reports/Etapa_4_CI_CD_Docker.md) (Fábio)
+- [Etapa_5 — Otimização do modelo](./docs/reports/Etapa_5_Otimizacao_do_modelo.md) (Bill)
+- [Etapa_6 — Observabilidade Prometheus/Grafana](./docs/reports/Etapa_6_Observabilidade_Prometheus_Grafana.md) (Bill)
+- [Etapa_7 — Orquestração de retreino](./docs/reports/Etapa_7_Orquestração_de_retreino.md) (Denis)
+- [Análise dos aceites das Etapas 5 e 6](./docs/reports/Analise_aceites_Etapas_5_e_6.md) (Bill)
+
+O status consolidado das Etapas 5+6 (aceite oficial de 20%) está na tabela no topo deste README. O status consolidado geral e os itens pendentes (cloud, vídeo STAR) continuam em [`docs/reports/Etapa_8_Cloud_video_documentacao.md`](docs/reports/Etapa_8_Cloud_video_documentacao.md).
 
 ## Plano de implementação
 
-O detalhamento completo (Fase 1 e Fase 2) está em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md). A Fase 2 — otimização ONNX, Prometheus, Grafana e dashboard — está implementada (vide
-seção "Otimização e observabilidade (Fase 2 — Etapas 5 e 6)" acima).
+O detalhamento completo (Fase 1 e Fase 2) está em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md). A Fase 2 — otimização ONNX, Prometheus, Grafana e dashboard — está implementada (vide seção "Otimização e observabilidade (Fase 2 — Etapas 5 e 6)" acima).
 
 ## Como colaborar com o Codex
 
@@ -437,5 +462,7 @@ Leia [`docs/WORKFLOW_AGENTICO.md`](docs/WORKFLOW_AGENTICO.md). Em resumo, identi
 
 - [`docs/CHECKLIST.md`](docs/CHECKLIST.md): fonte canônica do progresso e critérios de aceite.
 - [`docs/WORKFLOW_AGENTICO.md`](docs/WORKFLOW_AGENTICO.md): guia e casos de uso do Codex.
-- [`docs/adr/README.md`](docs/adr/README.md): decisões arquiteturais.
+- [`docs/adr/README.md`](docs/adr/README.md): decisões arquiteturais (0001 dataset, 0003 sample-size).
 - [`.agents/contracts/README.md`](.agents/contracts/README.md): contratos entre os componentes.
+- [`docs/guides/GUIA-USO-FRONTS.md`](docs/guides/GUIA-USO-FRONTS.md): cenários completos do portal e dashboard técnico.
+- [`docs/reports/`](docs/reports/): relatórios individuais por etapa (1-7) + [Análise dos aceites das Etapas 5 e 6](./docs/reports/Analise_aceites_Etapas_5_e_6.md).
