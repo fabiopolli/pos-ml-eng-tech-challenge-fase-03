@@ -53,6 +53,7 @@ jobs:
     needs: quality
     env:
       TRIAGE_ML_PROD_API_URL: http://127.0.0.1:8765
+      TRIAGE_ML_E2E_MODE: "true"
       TRIAGE_ML_API_KEY_DOCTOR: doc-e2e-key
       TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME: medico-e2e
       TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD: medico-senha

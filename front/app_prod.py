@@ -86,8 +86,17 @@ def load_config(environ: Mapping[str, str] | None = None) -> DashboardConfig:
     if missing:
         raise RuntimeError(f"Missing dashboard configuration: {', '.join(missing)}")
 
+    # The browser E2E job runs both services on the same runner. Keep the
+    # production default strict and make loopback support an explicit test-only
+    # opt-in rather than weakening SSRF protection for real deployments.
+    allow_loopback = source.get("TRIAGE_ML_E2E_MODE", "").lower() == "true"
+    api_url = validate_public_http_url(
+        source.get("TRIAGE_ML_PROD_API_URL", DEFAULT_API_URL),
+        allow_loopback=allow_loopback,
+    )
+
     return DashboardConfig(
-        api_url=_normalize_api_url(source.get("TRIAGE_ML_PROD_API_URL", DEFAULT_API_URL)),
+        api_url=api_url,
         doctor_username=source["TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME"],
         doctor_password=source["TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD"],
         patient_username=source["TRIAGE_ML_DASHBOARD_PATIENT_USERNAME"],

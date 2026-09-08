@@ -84,6 +84,18 @@ def test_prod_api_url_rejects_loopback(dashboard_module) -> None:
         dashboard_module.load_config(environment)
 
 
+def test_e2e_mode_allows_runner_loopback(dashboard_module) -> None:
+    """The local browser job may opt into its same-runner fake API."""
+
+    environment = dashboard_environment()
+    environment["TRIAGE_ML_PROD_API_URL"] = "http://127.0.0.1:8765"
+    environment["TRIAGE_ML_E2E_MODE"] = "true"
+
+    config = dashboard_module.load_config(environment)
+
+    assert config.api_url == "http://127.0.0.1:8765"
+
+
 def test_prod_api_url_rejects_cloud_metadata(dashboard_module) -> None:
     """``169.254.169.254`` is the canonical cloud metadata endpoint."""
 
