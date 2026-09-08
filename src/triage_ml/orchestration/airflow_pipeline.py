@@ -342,3 +342,213 @@ def validate_training_output(joblib_path: str | Path) -> dict[str, Any]:
         "metrics": metadata["metrics"],
         "checksum_sha256": metadata["checksum_sha256"],
     }
+
+
+# ---------------------------------------------------------------------------
+# Fase 2 / Etapa 5 — optimization helpers (Airflow pipeline integration)
+# ---------------------------------------------------------------------------
+# These helpers reuse the project's canonical artifacts and never duplicate
+# training or dataset preparation logic. The Airflow DAG
+# ``triage_ml_retraining_optimization`` orchestrates them per slice.
+
+# Cap the number of texts each optimization step forwards through the
+# sklearn/ONNX pipelines. Larger inputs are sampled uniformly at the
+# deterministic index set so the comparison remains comparable.
+_OPTIMIZATION_PROBE_TEXTS = 64
+
+
+def _manifest_path_for(version_dir: Path | str) -> Path:
+    """Locate the ``metadata.json`` for a given model-version directory."""
+
+    return Path(version_dir) / "metadata.json"
+
+
+def _read_metadata_for_version(version_dir: Path | str) -> dict[str, Any]:
+    from triage_ml.models.artifact import read_metadata
+
+    return read_metadata(_manifest_path_for(version_dir))
+
+
+def export_onnx_for_version(
+    version_dir: str | Path,
+    *,
+    opset: int = 17,
+) -> dict[str, Any]:
+    """Export an ONNX sibling for an existing artifact ``version_dir``.
+
+    Reads ``metadata.json`` to capture the canonical config fingerprint,
+    loads the persisted ``model.joblib`` and writes ``model.onnx`` next to
+    it. The function returns the same payload shape as
+    ``train_evaluate_persist`` (``reused``/``model_version``/``joblib``) with
+    an extra ``onnx_path`` field.
+
+    The function depends on the optional ``[optimization]`` group; it raises
+    ``RuntimeError`` with an actionable message when the extras are missing.
+    """
+
+    from triage_ml.optimization.optimize import export_onnx
+
+    version = Path(version_dir)
+    metadata = _read_metadata_for_version(version)
+    joblib_path = version / "model.joblib"
+    if not joblib_path.is_file():
+        raise FileNotFoundError(f"model.joblib not found in {version}")
+
+    import joblib
+
+    pipeline = joblib.load(joblib_path)
+    onnx_path, fingerprint = export_onnx(pipeline, version / "model.onnx", opset=opset)
+
+    optimization_fingerprint = fingerprint.to_dict()
+    optimization_fingerprint["fingerprint_hash"] = str(fingerprint)
+    optimization_record = {
+        "onnx_path": str(onnx_path),
+        "onnx_checksum_sha256": file_sha256(onnx_path),
+        "onnx_opset": fingerprint.opset,
+        "optimization_fingerprint": optimization_fingerprint,
+        "created_at": _isoformat_utc(),
+    }
+    return {
+        "reused": False,
+        "model_version": metadata["model_version"],
+        "joblib": str(joblib_path),
+        "metrics": metadata["metrics"],
+        "optimization": optimization_record,
+    }
+
+
+def benchmark_for_version(
+    version_dir: str | Path,
+    *,
+    benchmark_input_size: int = _OPTIMIZATION_PROBE_TEXTS,
+) -> dict[str, Any]:
+    """Compare sklearn vs ONNX variants of an artifact version.
+
+    The sklearn reference is benchmarked first; if ``model.onnx`` exists next
+    to ``model.joblib`` and the optimization extras are installed, the ONNX
+    variant is benchmarked on the same probe. Hardware/environment metadata
+    is captured via ``optimization.benchmark.capture_environment``.
+
+    Two JSON artifacts are written:
+
+    * ``models/<ver>/benchmark.json`` — sibling to the artifact itself.
+    * ``reports/benchmarks/benchmark.json`` — aggregate evidence used by
+      dashboards and tests.
+
+    When ONNX is unavailable the function still runs and emits
+    ``{"sklearn": ..., "onnx": null}`` so the orchestrator does not have to
+    branch.
+    """
+
+    import numpy as np
+
+    from triage_ml.optimization.benchmark import (
+        benchmark_predictor,
+        capture_environment,
+        write_benchmark_json,
+    )
+    from triage_ml.optimization.registry import resolve_variant_loader
+
+    version = Path(version_dir)
+    metadata = _read_metadata_for_version(version)
+    joblib_path = version / "model.joblib"
+    onnx_path = version / "model.onnx"
+
+    probe = _build_probe(benchmark_input_size)
+    sklearn_reference = [
+        int(value) for value in np.asarray(_load_sklearn(joblib_path).predict(probe)).reshape(-1)
+    ]
+
+    sklearn_predictor = resolve_variant_loader("sklearn")(joblib_path)
+    sklearn_result = benchmark_predictor(
+        sklearn_predictor,
+        texts=probe,
+        variant="sklearn",
+        repetitions=10,
+        warmup=2,
+    )
+
+    onnx_result = None
+    if onnx_path.is_file():
+        try:
+            onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
+            onnx_result = benchmark_predictor(
+                onnx_predictor,
+                texts=probe,
+                variant="onnx",
+                reference_predictions=sklearn_reference,
+                reference_labels=sklearn_reference,
+                repetitions=10,
+                warmup=2,
+            )
+        except RuntimeError:
+            # Optimization extras missing in the runtime environment; record
+            # the absence rather than failing the whole DAG.
+            onnx_result = None
+
+    environment = capture_environment()
+    aggregate_path = Path("reports/benchmarks/benchmark.json").resolve()
+    sibling_path = version / "benchmark.json"
+    aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+    write_benchmark_json(
+        aggregate_path,
+        sklearn_result=sklearn_result,
+        onnx_result=onnx_result,
+        environment=environment,
+        extra_metadata={"model_version": metadata["model_version"]},
+    )
+    write_benchmark_json(
+        sibling_path,
+        sklearn_result=sklearn_result,
+        onnx_result=onnx_result,
+        environment=environment,
+        extra_metadata={"model_version": metadata["model_version"]},
+    )
+    return {
+        "model_version": metadata["model_version"],
+        "benchmark_paths": {"aggregate": str(aggregate_path), "sibling": str(sibling_path)},
+        "sklearn": sklearn_result.to_dict(),
+        "onnx": onnx_result.to_dict() if onnx_result is not None else None,
+    }
+
+
+def _load_sklearn(joblib_path: Path) -> Any:
+    import joblib
+
+    return joblib.load(joblib_path)
+
+
+def _build_probe(size: int) -> list[str]:
+    """Build a deterministic probe input shared by both variants."""
+
+    return [
+        f"Optimisation probe input number {i:04d} covering cardiology and oncology"
+        for i in range(max(1, size))
+    ]
+
+
+def _isoformat_utc() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()
+
+
+def build_optimization_manifest(
+    version_dir: str | Path,
+    *,
+    available_variants: tuple[str, ...] = ("sklearn",),
+) -> dict[str, Any]:
+    """Build the canonical ``available_variants`` payload for ``metadata.json``.
+
+    The optimization DAG calls this helper after a successful ONNX export so
+    the artifact manifest advertises the variants it ships with. ``metadata``
+    itself is mutated only when ``apply=True`` (out of scope here — the
+    train flow keeps ``metadata.json`` immutable until a new version is
+    materialised).
+    """
+
+    payload = {
+        "available_variants": list(available_variants),
+        "build_utc": _isoformat_utc(),
+    }
+    return payload
