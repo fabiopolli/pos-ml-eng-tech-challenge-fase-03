@@ -552,3 +552,113 @@ def build_optimization_manifest(
         "build_utc": _isoformat_utc(),
     }
     return payload
+
+
+def train_with_sample_size(
+    *,
+    dataset_path: str | Path,
+    sample_size: int,
+    models_dir: str | Path,
+    figures_dir: str | Path,
+    config_path: str | Path,
+    source_commit: str,
+) -> dict[str, Any]:
+    """Train with an explicit ``sample_size`` override and persist the artifact.
+
+    Used by the optimization DAG to materialise a version directory per
+    ``dataset_sizing`` entry. The function is idempotent: when an existing
+    artifact shares ``(dataset_sha256, config_file_sha256, sample_size)``
+    the helper reuses it (mirroring ``train_evaluate_persist``).
+    """
+
+    from triage_ml.models.train import run_training
+
+    dataset_hash = file_sha256(dataset_path)
+    config_hash = file_sha256(config_path)
+    existing = _find_reusable_for_size(
+        models_dir,
+        dataset_sha256=dataset_hash,
+        config_file_sha256=config_hash,
+        sample_size=sample_size,
+    )
+    if existing is not None:
+        return existing
+
+    summary = run_training(
+        raw_csv_path=dataset_path,
+        out_dir=models_dir,
+        figures_dir=figures_dir,
+        config_path=config_path,
+        sample_size=sample_size,
+    )
+    version_dir = Path(models_dir) / summary["model_version"]
+    run_manifest = {
+        "dataset_sha256": dataset_hash,
+        "config_file_sha256": config_hash,
+        "source_commit": source_commit,
+        "sample_size": sample_size,
+    }
+    _atomic_write_json(version_dir / "airflow_run.json", run_manifest)
+    return {
+        "reused": False,
+        "model_version": summary["model_version"],
+        "sample_size": sample_size,
+        "joblib": summary["paths"]["joblib"],
+        "metrics": summary["metrics"],
+    }
+
+
+def _find_reusable_for_size(
+    models_dir: str | Path,
+    *,
+    dataset_sha256: str,
+    config_file_sha256: str,
+    sample_size: int,
+) -> dict[str, Any] | None:
+    """Find a prior artefact reusable for the requested ``sample_size``."""
+
+    base_reusable = find_reusable_artifact(
+        models_dir, dataset_sha256=dataset_sha256, config_file_sha256=config_file_sha256
+    )
+    if base_reusable is None:
+        return None
+    for manifest_path in sorted(Path(models_dir).glob("*/airflow_run.json"), reverse=True):
+        if not VERSION_PATTERN.fullmatch(manifest_path.parent.name):
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (
+            manifest.get("dataset_sha256") == dataset_sha256
+            and manifest.get("config_file_sha256") == config_file_sha256
+            and manifest.get("sample_size") == sample_size
+        ):
+            return {
+                "reused": True,
+                "model_version": manifest_path.parent.name,
+                "sample_size": sample_size,
+                "joblib": str(manifest_path.parent / "model.joblib"),
+                "metrics": base_reusable["metrics"],
+            }
+    return None
+
+
+def export_onnx_for_version_dir(
+    version_dir: str | Path,
+    *,
+    opset: int = 17,
+) -> dict[str, Any]:
+    """Convenience wrapper exposing ``export_onnx_for_version`` as a DAG call."""
+
+    return export_onnx_for_version(version_dir, opset=opset)
+
+
+def benchmark_for_version_dir(
+    version_dir: str | Path,
+    *,
+    benchmark_input_size: int = 64,
+) -> dict[str, Any]:
+    """Convenience wrapper exposing ``benchmark_for_version`` as a DAG call."""
+
+    return benchmark_for_version(version_dir, benchmark_input_size=benchmark_input_size)
