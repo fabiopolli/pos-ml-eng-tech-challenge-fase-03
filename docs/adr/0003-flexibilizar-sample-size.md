@@ -13,9 +13,10 @@ LogReg/LinearSVC). A Etapa 1 salvou esse limite também em
 
 A Fase 2 do [PLAN-text-classifier.md](../plans/PLAN-text-classifier.md) introduz
 a Etapa 5 do checklist, que pede a comparação baseline vs. otimizado **e** a
-exploração de **diferentes tamanhos de dataset** (`5K`, `10K`, `14K`). Os 14K
-são a totalidade das linhas de `data/medical_tc_train.csv` após a
-`PreparationReport` eliminar duplicatas/confitos.
+exploração de **diferentes tamanhos de dataset**. A proposta inicial citava
+`5K`, `10K` e `14K`, mas a auditoria executável confirmou 7.489 linhas
+elegíveis após a `PreparationReport`; o catálogo operacional foi corrigido
+para `5K`, `6K` e `7K`.
 
 Quando a DAG de otimização foi redesenhada para chamar `prepare_dataset`
 repetidamente (uma vez por `sample_size`), a cláusula hard `sample_size > 5_000
@@ -37,7 +38,7 @@ permanece como defesa contra OOM.
 
 **Positivas**
 
-- A Etapa 5 pode comparar treinamento em 5K / 10K / 14K sem duplicar lógica de
+- A Etapa 5 pode comparar treinamento em 5K / 6K / 7K sem duplicar lógica de
   preparação.
 - `dataset_sizing` em `configs/training.yaml` ganha utilidade real.
 - Limite inferior (`2_000`) preserva a invariante de que cada classe fica acima

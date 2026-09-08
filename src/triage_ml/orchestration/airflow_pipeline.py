@@ -387,15 +387,18 @@ def export_onnx_for_version(
     ``RuntimeError`` with an actionable message when the extras are missing.
     """
 
+    import joblib
+
     from triage_ml.optimization.optimize import export_onnx, fingerprint_dict, fingerprint_hash
 
     version = Path(version_dir)
-    metadata = _read_metadata_for_version(version)
     joblib_path = version / "model.joblib"
-    if not joblib_path.is_file():
-        raise FileNotFoundError(f"model.joblib not found in {version}")
+    metadata = validate_artifact_bundle(joblib_path)
+    pipeline = joblib.load(joblib_path)
 
     onnx_path = version / "model.onnx"
+    expected_fingerprint = fingerprint_dict(pipeline, opset=opset, quantized=False)
+    expected_fingerprint_hash = fingerprint_hash(expected_fingerprint)
 
     # Reuse path — only fires when the prior export advertised the
     # canonical fingerprint + checksum and the file is still on disk.
@@ -404,7 +407,14 @@ def export_onnx_for_version(
         "fingerprint_hash"
     )
     existing_checksum = existing_optimization.get("onnx_checksum_sha256")
-    if onnx_path.is_file() and existing_fingerprint and existing_checksum:
+    if (
+        onnx_path.is_file()
+        and existing_fingerprint == expected_fingerprint_hash
+        and existing_optimization.get("onnx_opset") == opset
+        and existing_optimization.get("source_joblib_checksum_sha256")
+        == metadata["checksum_sha256"]
+        and existing_checksum
+    ):
         current_checksum = file_sha256(onnx_path)
         if current_checksum == existing_checksum:
             return {
@@ -415,22 +425,23 @@ def export_onnx_for_version(
                 "optimization": existing_optimization,
             }
 
-    import joblib
-
-    pipeline = joblib.load(joblib_path)
     target_path, fingerprint = export_onnx(pipeline, onnx_path, opset=opset)
 
     optimization_fingerprint_dict = fingerprint_dict(
         pipeline, opset=opset, quantized=False
     ).to_dict()
-    optimization_fingerprint_dict["fingerprint_hash"] = fingerprint_hash(fingerprint)
+    optimization_fingerprint_dict["fingerprint_hash"] = expected_fingerprint_hash
     optimization_record = {
-        "onnx_path": str(target_path),
+        "onnx_path": target_path.name,
         "onnx_checksum_sha256": file_sha256(target_path),
         "onnx_opset": fingerprint.opset,
+        "source_joblib_checksum_sha256": metadata["checksum_sha256"],
         "optimization_fingerprint": optimization_fingerprint_dict,
         "created_at": _isoformat_utc(),
     }
+    metadata["available_variants"] = ["sklearn", "onnx"]
+    metadata["optimization"] = optimization_record
+    _atomic_write_json(_manifest_path_for(version), metadata)
     return {
         "reused": False,
         "model_version": metadata["model_version"],
@@ -444,6 +455,9 @@ def benchmark_for_version(
     version_dir: str | Path,
     *,
     benchmark_input_size: int = _OPTIMIZATION_PROBE_TEXTS,
+    dataset_path: str | Path | None = None,
+    config_path: str | Path | None = None,
+    sample_size: int | None = None,
 ) -> dict[str, Any]:
     """Compare sklearn vs ONNX variants of an artifact version.
 
@@ -485,7 +499,19 @@ def benchmark_for_version(
     # Single deserialisation of the sklearn bundle — both the reference
     # predictions and the sklearn benchmark need it.
     sklearn_pipeline = resolve_variant_loader("sklearn")(joblib_path)
-    probe = _build_probe(benchmark_input_size)
+    evaluation_texts: list[str] | None = None
+    reference_labels: list[int] | None = None
+    if dataset_path is not None or config_path is not None or sample_size is not None:
+        if dataset_path is None or config_path is None or sample_size is None:
+            raise ValueError("dataset_path, config_path and sample_size must be supplied together")
+        evaluation_texts, reference_labels = _load_evaluation_split(
+            dataset_path=dataset_path,
+            config_path=config_path,
+            sample_size=sample_size,
+            metadata=metadata,
+        )
+    probe = evaluation_texts or _build_probe(benchmark_input_size)
+    probe_labels = reference_labels
     sklearn_reference = [
         int(value) for value in np.asarray(sklearn_pipeline.predict(probe)).reshape(-1).tolist()
     ]
@@ -494,6 +520,8 @@ def benchmark_for_version(
         sklearn_pipeline,
         texts=probe,
         variant="sklearn",
+        reference_predictions=sklearn_reference if probe_labels is not None else None,
+        reference_labels=probe_labels,
         repetitions=10,
         warmup=2,
     )
@@ -523,8 +551,8 @@ def benchmark_for_version(
                     onnx_predictor,
                     texts=probe,
                     variant="onnx",
-                    reference_predictions=sklearn_reference,
-                    reference_labels=sklearn_reference,
+                    reference_predictions=sklearn_reference if probe_labels is not None else None,
+                    reference_labels=probe_labels,
                     repetitions=10,
                     warmup=2,
                 )
@@ -535,23 +563,92 @@ def benchmark_for_version(
                 onnx_result = None
 
     environment = capture_environment()
-    aggregate_path = _resolve_reports_path() / "benchmarks" / "benchmark.json"
+    benchmark_name = (
+        f"optimization_{sample_size}.json" if sample_size is not None else f"{version.name}.json"
+    )
+    aggregate_path = _resolve_reports_path() / "benchmarks" / benchmark_name
     sibling_path = version / "benchmark.json"
     aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+    promotion = _promotion_result(
+        sklearn_result.to_dict(), onnx_result.to_dict() if onnx_result else None
+    )
     payload = {
         "sklearn": sklearn_result.to_dict(),
         "onnx": onnx_result.to_dict() if onnx_result is not None else None,
         "environment": environment.to_dict(),
         "extra_metadata": {"model_version": metadata["model_version"]},
+        "promotion": promotion,
     }
 
     _atomic_write_json(aggregate_path, payload)
     _atomic_write_json(sibling_path, payload)
     return {
         "model_version": metadata["model_version"],
+        "joblib": str(joblib_path),
+        "sample_size": sample_size,
         "benchmark_paths": {"aggregate": str(aggregate_path), "sibling": str(sibling_path)},
         "sklearn": sklearn_result.to_dict(),
         "onnx": onnx_result.to_dict() if onnx_result is not None else None,
+        "environment": environment.to_dict(),
+        "promotion": promotion,
+    }
+
+
+def _load_evaluation_split(
+    *,
+    dataset_path: str | Path,
+    config_path: str | Path,
+    sample_size: int,
+    metadata: dict[str, Any],
+) -> tuple[list[str], list[int]]:
+    """Recreate and verify the exact held-out split used by training."""
+
+    from triage_ml.data.prepare import split_dataset
+    from triage_ml.models.train import dataframe_fingerprint
+
+    config = load_config(Path(config_path))
+    seed = int(config["random_state"])
+    raw = pd.read_csv(dataset_path)
+    prepared, _ = prepare_dataset(raw, sample_size=sample_size, random_state=seed)
+    _, test = split_dataset(prepared, test_size=float(config["test_size"]), random_state=seed)
+    if dataframe_fingerprint(test) != metadata["fingerprints"]["test_split_sha256"]:
+        raise ValueError("recreated evaluation split does not match metadata.test_split_sha256")
+    return test["text"].astype(str).tolist(), [int(value) for value in test["target"]]
+
+
+def _promotion_result(
+    sklearn_result: dict[str, Any], onnx_result: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Evaluate the documented quality and p95 latency gates."""
+
+    if onnx_result is None:
+        return {
+            "eligible": False,
+            "quality_gate_passed": False,
+            "latency_gate_passed": False,
+            "delta_macro_f1_pp": None,
+            "speedup_p95": None,
+        }
+    sklearn_f1 = sklearn_result.get("macro_f1")
+    onnx_f1 = onnx_result.get("macro_f1")
+    quality_passed = (
+        sklearn_f1 is not None
+        and onnx_f1 is not None
+        and float(onnx_f1) >= float(sklearn_f1) - 0.01
+    )
+    sklearn_p95 = float(sklearn_result["latency_p95_ms"])
+    onnx_p95 = float(onnx_result["latency_p95_ms"])
+    latency_passed = onnx_p95 < sklearn_p95
+    return {
+        "eligible": quality_passed and latency_passed,
+        "quality_gate_passed": quality_passed,
+        "latency_gate_passed": latency_passed,
+        "delta_macro_f1_pp": (
+            (float(onnx_f1) - float(sklearn_f1)) * 100.0
+            if sklearn_f1 is not None and onnx_f1 is not None
+            else None
+        ),
+        "speedup_p95": sklearn_p95 / onnx_p95 if onnx_p95 > 0 else None,
     }
 
 
@@ -586,11 +683,8 @@ def build_optimization_manifest(
 ) -> dict[str, Any]:
     """Build the canonical ``available_variants`` payload for ``metadata.json``.
 
-    The optimization DAG calls this helper after a successful ONNX export so
-    the artifact manifest advertises the variants it ships with. ``metadata``
-    itself is mutated only when ``apply=True`` (out of scope here — the
-    train flow keeps ``metadata.json`` immutable until a new version is
-    materialised).
+    ``export_onnx_for_version`` persists this shape atomically in the canonical
+    metadata after validating the source bundle.
     """
 
     payload = {
@@ -709,6 +803,7 @@ def train_with_sample_size(
         "config_file_sha256": config_hash,
         "source_commit": source_commit,
         **identity,
+        "metrics": summary["metrics"],
     }
     _atomic_write_json(version_dir / "airflow_run.json", run_manifest)
     return {
@@ -751,9 +846,9 @@ def _find_reusable_for_size(
         if manifest.get("sample_size") != sample_size:
             continue
         joblib_path = manifest_path.parent / "model.joblib"
-        if not joblib_path.is_file():
-            # Manifest points at an orphan artefact (cleanup, partial
-            # publish, FS evicted); skip and let the caller train again.
+        try:
+            metadata = validate_artifact_bundle(joblib_path)
+        except (OSError, ValueError, RuntimeError):
             continue
         # Cross-check the persisted identity against the active config to
         # surface silent drift (seed/classifier change). We use the
@@ -768,7 +863,7 @@ def _find_reusable_for_size(
             "model_version": manifest_path.parent.name,
             "sample_size": sample_size,
             "joblib": str(joblib_path),
-            "metrics": manifest.get("metrics"),
+            "metrics": metadata["metrics"],
         }
     return None
 

@@ -5,6 +5,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     image: triage-ml-api:local
     environment:
       MODEL_PATH: ${API_MODEL_PATH:?Set API_MODEL_PATH to /models/<version>/model.joblib}
@@ -62,6 +63,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: runtime
     image: triage-ml-api:local
     environment:
       MODEL_PATH: ${API_MODEL_PATH:?Set API_MODEL_PATH to /models/<version>/model.joblib}

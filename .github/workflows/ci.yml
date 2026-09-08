@@ -28,7 +28,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --dev --locked
+        run: uv sync --dev --locked --extra optimization --extra observability
 
       - name: Check formatting
         run: uv run ruff format --check .
@@ -129,7 +129,15 @@ jobs:
           persist-credentials: false
 
       - name: Build production API image
-        run: docker build --tag triage-ml-api:ci .
+        run: docker build --target runtime --tag triage-ml-api:ci .
+
+      - name: Build observability API image
+        run: docker build --target runtime-observability --tag triage-ml-api-observability:ci .
+
+      - name: Smoke-test observability dependencies
+        run: >-
+          docker run --rm --entrypoint python triage-ml-api-observability:ci -c
+          "import onnx, onnxruntime, prometheus_client, skl2onnx"
 
       - name: Build Streamlit images
         run: |

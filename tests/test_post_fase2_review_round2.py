@@ -384,6 +384,9 @@ def test_model_not_ready_returns_503_when_onnx_missing(production_client, dummy_
     # so the ``/predict`` path resolves ``onnx`` and the holder has no
     # ``model.onnx`` next to it.
     production_client.app.state.model_variant = "onnx"
+    health = production_client.get("/health")
+    assert health.status_code == 503
+    assert health.json()["model_variant"] == "onnx"
     response = production_client.post(
         "/predict",
         json={"text": "this is a short text placeholder"},
@@ -416,7 +419,9 @@ def test_metric_error_codes_includes_full_union() -> None:
 
 
 @optimization_required
-def test_export_onnx_for_version_reuses_existing_on_disk(tmp_path: Path) -> None:
+def test_export_onnx_for_version_reuses_existing_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A matching ``model.onnx`` + ``metadata.optimization`` should yield ``reused=True``."""
 
     pipeline = Pipeline(
@@ -446,6 +451,10 @@ def test_export_onnx_for_version_reuses_existing_on_disk(tmp_path: Path) -> None
         "schema_version": 1,
     }
     (version_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    monkeypatch.setattr(
+        "triage_ml.orchestration.airflow_pipeline.validate_artifact_bundle",
+        lambda path: json.loads(Path(path).with_name("metadata.json").read_text(encoding="utf-8")),
+    )
 
     first = export_onnx_for_version(version_dir, opset=17)
     assert first["reused"] is False

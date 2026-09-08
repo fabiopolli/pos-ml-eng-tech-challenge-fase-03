@@ -51,6 +51,7 @@ _ROUTE_TEMPLATES: tuple[tuple[str, str], ...] = (
 _METRIC_ERROR_CODES: frozenset[str] = frozenset(
     ALLOWED_ERROR_CODES | LANGUAGE_ERROR_CODES | {"request_failed"}
 )
+_KNOWN_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"})
 
 
 def _normalise_error_code(value: object) -> str | None:
@@ -76,6 +77,11 @@ def _normalise_route(path: str) -> str:
         if re.match(pattern, path):
             return template
     return "/other"
+
+
+def _normalise_method(method: str) -> str:
+    candidate = method.upper()
+    return candidate if candidate in _KNOWN_METHODS else "OTHER"
 
 
 def _model_variant(request: Request) -> str:
@@ -120,7 +126,7 @@ class PrometheusMiddleware:
             await self._app(scope, receive, _send)
         finally:
             route = _normalise_route(request.url.path)
-            method = request.method.upper()
+            method = _normalise_method(request.method)
             variant = _model_variant(request)
             elapsed = time.perf_counter() - start
             REQUESTS_TOTAL.labels(
@@ -136,6 +142,7 @@ class PrometheusMiddleware:
             error_code = _normalise_error_code(error_code_raw)
             if (
                 status_holder["status"] >= 400
+                and route == "/predict"
                 and error_code
                 and PREDICTION_ERRORS_TOTAL is not None
             ):

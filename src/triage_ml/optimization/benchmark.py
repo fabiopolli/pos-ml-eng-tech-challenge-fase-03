@@ -149,8 +149,8 @@ def benchmark_predictor(
     included (sklearn reference vs measured predictions).
     """
 
-    if repetitions <= 0 or warmup < 0:
-        raise ValueError("repetitions must be > 0 and warmup must be >= 0")
+    if repetitions <= 0 or warmup < 0 or batch_size <= 0:
+        raise ValueError("repetitions and batch_size must be > 0 and warmup must be >= 0")
     if not texts:
         raise ValueError("texts must contain at least one element to benchmark")
 
@@ -162,16 +162,22 @@ def benchmark_predictor(
     load_seconds = time.perf_counter() - load_start
 
     timings = _time_call(predict_one, repetitions=repetitions, warmup=warmup)
-    predictions = predictor.predict(list(texts[:batch_size]))
-    predictions_list = [int(value) for value in predictions]
-
     agreement: float | None = None
     macro_f1: float | None = None
-    if reference_predictions is not None and reference_labels is not None:
-        agreement = _agreement_rate(predictions_list, list(reference_predictions))
-        macro_f1 = _macro_f1(predictions_list, list(reference_labels))
+    if reference_predictions is not None or reference_labels is not None:
+        if reference_predictions is None or reference_labels is None:
+            raise ValueError("reference_predictions and reference_labels must be supplied together")
+        if len(reference_predictions) != len(texts) or len(reference_labels) != len(texts):
+            raise ValueError(
+                "reference predictions and labels must match the evaluation text count"
+            )
+        quality_predictions = [int(value) for value in predictor.predict(list(texts))]
+        if len(quality_predictions) != len(texts):
+            raise ValueError("predictor returned the wrong number of quality predictions")
+        agreement = _agreement_rate(quality_predictions, list(reference_predictions))
+        macro_f1 = _macro_f1(quality_predictions, list(reference_labels))
 
-    throughput = 1000.0 / statistics.mean(timings) if timings else 0.0
+    throughput = batch_size * 1000.0 / statistics.mean(timings) if timings else 0.0
 
     return BenchmarkResult(
         variant=variant,

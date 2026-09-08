@@ -18,6 +18,10 @@ RUN chmod +x /opt/triage-ml/entrypoint.sh \
     && pip install --no-cache-dir \
     "matplotlib>=3.7" \
     "seaborn>=0.12" \
-    --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.1.7/constraints-3.12.txt
+    --constraint https://raw.githubusercontent.com/apache/airflow/constraints-3.1.7/constraints-3.12.txt \
+    && pip install --no-cache-dir \
+    "onnx>=1.15,<2" \
+    "onnxruntime>=1.17,<2" \
+    "skl2onnx>=1.16,<2"
 
 ENTRYPOINT ["/opt/triage-ml/entrypoint.sh"]

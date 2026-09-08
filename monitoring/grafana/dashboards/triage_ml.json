@@ -31,7 +31,7 @@
       "targets": [
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket{route=\"/predict\", method=\"POST\"}[5m])))",
           "legendFormat": "p95 {{model_variant}}"
         }
       ],
@@ -45,11 +45,12 @@
       "targets": [
         {
           "refId": "C",
-          "expr": "sum by (error_code) (rate(triage_ml_prediction_errors_total[5m]))",
+          "expr": "sum by (error_code, model_variant) (rate(triage_ml_prediction_errors_total{route=\"/predict\"}[5m])) / on(model_variant) group_left clamp_min(sum by (model_variant) (rate(triage_ml_requests_total{route=\"/predict\", method=\"POST\"}[5m])), 1e-12)",
           "legendFormat": "{{error_code}}"
         }
       ],
-      "options": {"colorMode": "background", "reduceOptions": {"calcs": ["lastNotNull"]}}
+      "options": {"colorMode": "background", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}
     },
     {
       "title": "Baseline vs optimized (p95)",
@@ -59,25 +60,28 @@
       "targets": [
         {
           "refId": "D",
-          "expr": "histogram_quantile(0.50, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.50, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket{route=\"/predict\", method=\"POST\"}[5m])))",
           "legendFormat": "p50 {{model_variant}}",
           "format": "table",
           "instant": true
         },
         {
           "refId": "E",
-          "expr": "histogram_quantile(0.95, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket{route=\"/predict\", method=\"POST\"}[5m])))",
           "legendFormat": "p95 {{model_variant}}",
           "format": "table",
           "instant": true
         },
         {
           "refId": "F",
-          "expr": "histogram_quantile(0.99, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket{route=\"/predict\", method=\"POST\"}[5m])))",
           "legendFormat": "p99 {{model_variant}}",
           "format": "table",
           "instant": true
         }
+      ],
+      "transformations": [
+        {"id": "joinByField", "options": {"byField": "model_variant", "mode": "outer"}}
       ]
     }
   ],

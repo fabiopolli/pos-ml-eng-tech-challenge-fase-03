@@ -52,7 +52,7 @@ Contrato inicial proposto, sujeito a validação por Romário:
 ## Artefatos e Airflow
 
 - **DAG base** `triage_ml_retraining`: ingestão → validação → treinamento → persistência (Etapa 7);
-- **DAG Fase 2** `triage_ml_retraining_optimization`: itera sobre `dataset_sizing: [5000, 10000, 14000]` (`configs/training.yaml`, override `TRIAGE_DATASET_SLICES`). Para cada slice exporta `model.onnx`, mede `benchmark_for_version`, valida bundle e publica `reports/benchmarks/dataset_sizing.json` consolidado por `compare_slices`. Gateada por `TRIAGE_OPTIMIZATION_ENABLED=false` para preservar o comportamento da Etapa 7;
+- **DAG Fase 2** `triage_ml_retraining_optimization`: itera sobre `dataset_sizing: [5000, 6000, 7000]` (`configs/training.yaml`, override `TRIAGE_DATASET_SLICES`), validando previamente os tamanhos contra as linhas elegíveis. Para cada corte exporta `model.onnx`, recria e valida o mesmo split de teste, mede `benchmark_for_version`, aplica gates de qualidade/latência, valida o bundle e publica `reports/benchmarks/dataset_sizing.json` consolidado por `compare_slices`. Gateada por `TRIAGE_OPTIMIZATION_ENABLED=false` para preservar o comportamento da Etapa 7;
 - tarefas idempotentes quando possível: `find_reusable_artifact` reusa versões por `(dataset_sha256, config_file_sha256)` e `train_with_sample_size` reusa por `(...sample_size)`;
 - caminho/registro do artefato configurável, não hardcoded para uma máquina (`TRIAGE_MODELS_DIR`, `MODEL_PATH` no contêiner);
 - falhas deixam evidência acionável sem expor dados sensíveis (logs JSON com `format_exc_info` mas sem `text`).

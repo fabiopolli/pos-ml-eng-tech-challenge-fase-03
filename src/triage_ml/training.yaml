@@ -18,12 +18,10 @@ task_type: multiclass_text_classification
 # (comma separated integers). Empty/missing falls back to ``[sample_size]``.
 #
 # The minimum entry is bounded by ``prepare_dataset`` (``>= 2000``) and the
-# upper bound is the size of the eligible rows in the raw CSV. With
-# ``medical_tc_train.csv`` (14K rows, ~7K eligible after
-# ``PreparationReport``) the catalog below keeps the cheapest baselines
-# (``5K`` and the full eligible set) plus an intermediate ``10K`` to compare
-# the cost/generalisation trade-off.
-dataset_sizing: [5000, 10000, 14000]
+# upper bound is the size of the eligible rows in the raw CSV. The canonical
+# dataset has 7,489 eligible rows after conflict removal, so these three
+# reproducible cuts stay within the available population.
+dataset_sizing: [5000, 6000, 7000]
 
 label_mapping:
   1: neoplasms

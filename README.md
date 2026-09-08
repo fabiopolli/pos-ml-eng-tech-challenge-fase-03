@@ -86,7 +86,7 @@ Denis avaliou inicialmente:
 
 Decisão registrada como ADR 0001: **Medical Abstracts TC Corpus** (CC BY-SA 3.0), com cinco categorias clínicas (`target ∈ {1..5}`). MIMIC-III foi descartado por exigir treinamento obrigatório, derivação de labels e ter maior risco de privacidade. Detalhes completos em [`docs/adr/0001-escolha-recorte-dataset.md`](docs/adr/0001-escolha-recorte-dataset.md) e em [`docs/dataset.md`](docs/dataset.md).
 
-Contrato: recorte reproduzível entre 2.000 e 5.000 registros (com `dataset_sizing: [5000, 10000, 14000]` no `configs/training.yaml` para a Etapa 5/6 da Fase 2 — vide ADR 0003), colunas `text` e `target`, sem duplicatas exatas ou leakage entre treino e teste. Dados brutos, processados e artefatos binários não devem ser enviados ao Git.
+Contrato: recorte reproduzível a partir de 2.000 registros (com `dataset_sizing: [5000, 6000, 7000]` no `configs/training.yaml` para a Etapa 5/6 da Fase 2 — vide ADR 0003), limitado à população elegível, com colunas `text` e `target`, sem duplicatas exatas ou leakage entre treino e teste. Dados brutos, processados e artefatos binários não devem ser enviados ao Git.
 
 Como os candidatos estão em inglês, a recomendação inicial é manter a inferência sem tradução online. Para não correr riscos de LGPD ou de latência em dados clínicos sensíveis, a API ganhou uma **checagem de idioma local** com `langid` que rejeita preventivamente qualquer texto fora do allow-list `{"en"}` antes do modelo ser invocado. Mais detalhes na seção "Modelo (Bill)".
 
@@ -128,7 +128,7 @@ A stack de otimização e observabilidade (Fase 2) tem overlay próprio em [`inf
 
 ### Otimização e observabilidade (Fase 2 — Etapas 5 e 6)
 
-A nova DAG [`triage_ml_retraining_optimization`](airflow/dags/triage_retraining_optimization.py) reaproveita o pipeline de ingestão, validação e treino da Etapa 7 e itera sobre o catálogo `dataset_sizing: [5000, 10000, 14000]` definido em [`configs/training.yaml`](configs/training.yaml) (sobrescrevível em runtime via `TRIAGE_DATASET_SLICES`). Para cada slice, a DAG exporta o artefato sklearn em [`model.onnx`](src/triage_ml/optimization/optimize.py), publica os checksums em `metadata.json` e grava `reports/benchmarks/benchmark.json` comparando sklearn vs ONNX no mesmo probe (workload documentado em [`benchmark.py`](src/triage_ml/optimization/benchmark.py)).
+A nova DAG [`triage_ml_retraining_optimization`](airflow/dags/triage_retraining_optimization.py) reaproveita o pipeline de ingestão, validação e treino da Etapa 7 e itera sobre o catálogo `dataset_sizing: [5000, 6000, 7000]` definido em [`configs/training.yaml`](configs/training.yaml) (sobrescrevível em runtime via `TRIAGE_DATASET_SLICES`). Para cada corte, a DAG exporta [`model.onnx`](src/triage_ml/optimization/optimize.py), publica checksums e vínculo ao `model.joblib` em `metadata.json`, recria o split de teste pelo fingerprint e grava `reports/benchmarks/optimization_<sample_size>.json`. A promoção exige degradação de macro-F1 de no máximo 1 pp e p95 ONNX menor que o baseline.
 
 A API oficial ganhou:
 

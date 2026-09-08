@@ -83,11 +83,10 @@ def _scrape_metrics(url: str) -> str:
 
 
 def _resolve_api_key(args: argparse.Namespace) -> str:
-    """Pick the most appropriate API key (doctor first, service fallback)."""
+    """Resolve the doctor key required by the production ``/predict`` RBAC."""
 
     for variable in (
         "TRIAGE_ML_API_KEY_DOCTOR",
-        "TRIAGE_ML_API_KEY_SERVICE",
         "TRIAGE_ML_TRAFFIC_API_KEY",
     ):
         value = os.environ.get(variable)
@@ -105,24 +104,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--api-key",
         default=os.environ.get("TRIAGE_ML_TRAFFIC_API_KEY"),
-        help="API key; TRIAGE_ML_API_KEY_DOCTOR/SERVICE/TRAFFIC_API_KEY env vars also accepted.",
+        help="Doctor API key; TRIAGE_ML_API_KEY_DOCTOR/TRAFFIC_API_KEY env vars also accepted.",
     )
-    parser.add_argument("--role", choices=("doctor", "service"), default="doctor")
-    parser.add_argument("--requests", type=int, default=20)
+    parser.add_argument("--requests", type=int, default=None)
+    parser.add_argument(
+        "--iterations",
+        type=int,
+        default=1,
+        help="Complete rounds over the 32 synthetic samples (ignored when --requests is set).",
+    )
     args = parser.parse_args(argv)
 
     args.api_key = _resolve_api_key(args) or ""
     if not args.api_key:
-        print("error: --api-key or TRIAGE_ML_API_KEY_* is required", file=sys.stderr)
+        print("error: a doctor --api-key or TRIAGE_ML_API_KEY_DOCTOR is required", file=sys.stderr)
+        return 2
+    if args.iterations <= 0 or (args.requests is not None and args.requests <= 0):
+        print("error: --iterations and --requests must be positive", file=sys.stderr)
         return 2
 
     _enforce_loopback(args.sklearn_url, role="sklearn")
     _enforce_loopback(args.onnx_url, role="onnx")
 
     samples = _build_samples()
+    request_count = args.requests if args.requests is not None else args.iterations * len(samples)
     failure_count = 0
-    for target in (args.sklearn_url, args.onnx_url):
-        for index in range(args.requests):
+    for index in range(request_count):
+        for target in (args.sklearn_url, args.onnx_url):
             text = samples[index % len(samples)]
             try:
                 status, _ = _post_json(
@@ -136,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             if status >= 400:
                 failure_count += 1
-        time.sleep(0.5)  # pause between variants
+        time.sleep(0.01)
 
     # Final scrape to confirm metrics were emitted by both variants.
     for label, target in (("sklearn", args.sklearn_url), ("onnx", args.onnx_url)):
@@ -144,13 +152,22 @@ def main(argv: list[str] | None = None) -> int:
             payload = _scrape_metrics(target)
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
             print(f"warn: scrape {label} failed: {exc}", file=sys.stderr)
+            failure_count += 1
             continue
-        samples_observed = sum(
-            1
+        observations = sum(
+            float(line.rsplit(" ", 1)[1])
             for line in payload.splitlines()
             if line.startswith("triage_ml_request_latency_seconds_count")
+            and 'route="/predict"' in line
         )
-        print(f"observed {samples_observed} latency buckets on {label} ({target})")
+        if observations < request_count:
+            print(
+                f"warn: expected at least {request_count} prediction observations on {label}, "
+                f"found {observations:g}",
+                file=sys.stderr,
+            )
+            failure_count += 1
+        print(f"observed {observations:g} prediction requests on {label} ({target})")
 
     return failure_count
 

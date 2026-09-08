@@ -29,6 +29,7 @@ def test_api_compose_mounts_models_read_only_and_requires_secrets() -> None:
     environment = service["environment"]
 
     assert service["volumes"] == ["./models:/models:ro"]
+    assert service["build"]["target"] == "runtime"
     assert service["read_only"] is True
     assert service["cap_drop"] == ["ALL"]
     assert service["security_opt"] == ["no-new-privileges:true"]
@@ -74,6 +75,7 @@ def test_front_containers_are_isolated_and_depend_on_healthy_api() -> None:
     api_dev = compose["services"].get("api-dev")
     assert api_dev is not None, "compose must define api-dev under profiles: [dev]"
     assert api_dev["profiles"] == ["dev"]
+    assert api_dev["build"]["target"] == "runtime"
     assert api_dev["read_only"] is True
     assert api_dev["cap_drop"] == ["ALL"]
     assert api_dev["security_opt"] == ["no-new-privileges:true"]

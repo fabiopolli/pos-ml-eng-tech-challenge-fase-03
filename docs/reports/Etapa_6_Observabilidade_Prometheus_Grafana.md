@@ -5,8 +5,8 @@
 | Integrante | Bill |
 | Etapa do checklist | Etapa 6 — Observabilidade e stack Prometheus/Grafana (`docs/CHECKLIST.md`) |
 | Período desta entrega | 2026-09-08 (implementação inicial + dois ciclos de revisão cruzada) |
-| Última revisão | 2026-09-08 — 2º ciclo de revisão fechou 12 regressões remanescentes (lifecycle do holder, double `session.run`, allow-list público de métricas, defesa contra symlink, reuso de ONNX por checksum, idempotência do fixture de testes) |
-| Status | ✅ Stack Prometheus + Grafana rodando no Compose overlay, dashboard canônico com 4 painéis, privacidade de `text` validada por teste automatizado, suíte completa verde |
+| Última revisão | 2026-09-08 — auditoria executável corrigiu imagem com extras, readiness ONNX, datasource, queries, cardinalidade e gerador de tráfego |
+| Status | Stack declarativa validada, dashboard canônico com 4 painéis, privacidade de `text` coberta na API real e suíte completa verde com extras |
 
 Este relatório documenta a entrega da Etapa 6: middleware Prometheus no `/predict`, métricas privadas (`CollectorRegistry` dedicado) com cardinalidade controlada, dashboard Grafana provisionado automaticamente, Compose overlay com `api-sklearn` + `api-onnx` + Prometheus + Grafana em rede privada, gerador de carga sintética benigna e política de privacidade de `text` enforçada por teste automatizado.
 
@@ -15,14 +15,14 @@ Este relatório documenta a entrega da Etapa 6: middleware Prometheus no `/predi
 - `src/triage_ml/observability/metrics.py` define `REQUESTS_TOTAL`, `REQUEST_LATENCY_SECONDS` e `PREDICTION_ERRORS_TOTAL` em `CollectorRegistry` **privado** (não vaza do registry global do `prometheus_client`), buckets `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5]`s e degrade gracioso quando o `[observability]` extra está ausente.
 - `src/triage_ml/observability/middleware.py` — ASGI middleware route-aware que mapeia `path → /predict|/reload|/health|/model-info|/models|/metrics|/"` via templates, mantendo a label `route` de cardinalidade baixa (qualquer path fora dos templates cai em `/other`).
 - API oficial (`src/triage_ml/api/app.py`): `add_middleware(PrometheusMiddleware)`, novo endpoint `GET /metrics` (sem RBAC nesta fase; revisitar na Etapa 8), `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` resolvido em `app.state.model_variant` no `lifespan` (single source of truth). `predict` consulta o adapter ONNX quando a variante ativa é `onnx` (LinearSVC cai para `decision_function`).
-- HTTP exceptions gravam `request.state.error_code` (allow-list público `ALLOWED_ERROR_CODES | LANGUAGE_ERROR_CODES | {"request_failed"}`) para a métrica `prediction_errors_total{route, error_code, model_variant}`.
+- Erros de `POST /predict` gravam `request.state.error_code` em allow-list público para `prediction_errors_total{route, error_code, model_variant}`; erros de outras rotas não poluem essa métrica.
 - `infra/docker-compose.yml` overlay roda `api-sklearn:8000`, `api-onnx:8000`, `prometheus:9090`, `grafana:3000` em rede privada `observability`, com `read_only: true`, `cap_drop: ALL`, `no-new-privileges` (espelha o compose de produção).
 - `monitoring/prometheus/prometheus.yml` scrape em `api-sklearn:8000/metrics` e `api-onnx:8000/metrics` (intervalo 5s); datasource + provider YAML em `monitoring/grafana/provisioning/`; dashboard JSON canônico `monitoring/grafana/dashboards/triage_ml.json` com 4 painéis (`Requests by route/status`, `Latency p95` por `model_variant`, `Prediction error rate`, tabela `Baseline vs optimized (p50/p95/p99)`).
-- `Dockerfile` ganhou `target=runtime-observability` (instala `[observability,optimization]` em cima do `runtime-base`); produção continua usando `target=runtime` sem extras.
-- `scripts/generate_observability_traffic.py` — gerador de carga sintética benigna (32 amostras com tópicos clínicos rotacionados por `random.choice`, sem persistência nem payloads sensíveis), com `_enforce_loopback` recusando SSRF drift para hosts não-loopback.
+- `Dockerfile` usa um builder dedicado para `runtime-observability` com os extras lockados; `runtime` permanece sem extras e é o target explícito das APIs padrão.
+- `scripts/generate_observability_traffic.py` — gerador de carga sintética benigna que intercala as variantes, aceita `--iterations`, exige credencial compatível com doctor e falha se o scrape não confirmar as observações.
 - 13 novos testes em `tests/test_observability_metrics.py` e `tests/test_observability_privacy.py` — verifica `ALLOWED_LABELS`, cardinalidade do payload Prometheus (com `le` reservado para buckets de histograma), ausência do fixture de texto `"PRIVACY-CANARY-CARDIOVASCULAR..."` em logs/resposta/métricas, e `render_metrics()`.
 - Política de privacidade publicada em [`README.md`](../../README.md) e em [`.agents/contracts/README.md`](../../.agents/contracts/README.md): texto é classificado e descartado; nunca persistido, logado, copiado para label ou retornado em erro. Labels Prometheus permitidas: `route`, `method`, `status`, `model_variant`, `error_code` (+ `le` reservado pelo Prometheus para buckets de histograma).
-- Suíte final pós 2 ciclos de revisão cruzada: **262 testes verdes**, 9 skipped (3 por dependência opcional `[optimization]`).
+- Suíte final com extras: **276 testes verdes**, 1 skip do cenário que exige ambiente sem extras.
 
 ## 2. Escopo e alinhamento com o plano
 
@@ -99,7 +99,7 @@ O aceite oficial (20% junto com Etapa 5) — stack completa no Compose e dashboa
 |---|---|---|---|
 | `triage_ml_requests_total` | Counter | `route`, `method`, `status`, `model_variant` | Uma observação por request HTTP, independente do resultado. |
 | `triage_ml_request_latency_seconds` | Histogram | `route`, `method`, `model_variant` | Buckets `(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5)`. |
-| `triage_ml_prediction_errors_total` | Counter | `route`, `error_code`, `model_variant` | Incrementado apenas para `status >= 400` **e** `error_code` no allow-list público. |
+| `triage_ml_prediction_errors_total` | Counter | `route`, `error_code`, `model_variant` | Incrementado apenas em `/predict` para `status >= 400` e `error_code` no allow-list público. |
 
 `ALLOWED_LABELS = frozenset({"route", "method", "status", "model_variant", "error_code"})` é a constante de cardinalidade — qualquer outra label no payload Prometheus falha no teste `test_metric_payload_respects_allowed_labels`.
 
@@ -178,7 +178,7 @@ GRAFANA_ADMIN_PASSWORD=set-a-strong-password
 TRIAGE_ALLOW_PUBLIC_OBSERVABILITY=false
 ```
 
-A imagem da API usada no overlay é construída pelo alvo `runtime-observability` do `Dockerfile`, que adiciona os pacotes `[observability]` + `[optimization]` por cima do `runtime-base`. A produção continua consumindo apenas `target=runtime`.
+A imagem do overlay usa `runtime-observability`, cuja virtualenv é resolvida no builder com `--extra observability --extra optimization`. A produção continua consumindo explicitamente `target=runtime`.
 
 ## 8. Comandos reproduzíveis
 
@@ -187,7 +187,7 @@ A imagem da API usada no overlay é construída pelo alvo `runtime-observability
 uv run ruff format --check src/ tests/ scripts/ airflow/
 uv run ruff check src/ tests/ scripts/ airflow/
 uv run pytest tests/test_observability_metrics.py tests/test_observability_privacy.py -v
-uv run pytest tests/                                   # suíte completa (262 testes verdes)
+uv run --extra optimization --extra observability pytest tests/
 
 # Subir a stack overlay (api-sklearn + api-onnx + prometheus + grafana)
 docker compose -f infra/docker-compose.yml build
@@ -220,7 +220,7 @@ Execução local do overlay Compose (artefato `20260905T171611Z-f2cb6f23f9cd` mo
 | `GET /health` em `api-sklearn` (8001) | `{"status":"ok","model_version":"20260905T171611Z-f2cb6f23f9cd","model_variant":"sklearn"}`. |
 | `GET /health` em `api-onnx` (8002) | `{"status":"ok","model_version":"20260905T171611Z-f2cb6f23f9cd","model_variant":"onnx"}`. |
 | `GET /metrics` em ambos | expõe `triage_ml_requests_total`, `triage_ml_request_latency_seconds_*`, `triage_ml_prediction_errors_total` sem labels proibidas. |
-| `python scripts/generate_observability_traffic.py` | 320 chamadas (5 iterações × 32 amostras × 2 variantes) com `--api-key` válido; nenhuma exceção; payloads sintéticos (sem `text` clínico). |
+| `python scripts/generate_observability_traffic.py` | Com `--iterations 5`, produz 320 chamadas (5 × 32 × 2 variantes), intercaladas e confirmadas pelo scrape. |
 | Painel "Requests by route/status" | série temporal por `(route, status)` mostrando `/predict` em ambos os variants. |
 | Painel "Latency p95" | séries separadas por `model_variant` (`sklearn`, `onnx`). |
 | Painel "Prediction error rate" | vazio até erro proposital; após `POST /predict` com chave inválida aparece `error_code="unauthorized"`. |
@@ -236,7 +236,7 @@ Print e JSON do dashboard versionáveis em `reports/figures/triage_ml_dashboard.
 |---|---|
 | `uv run ruff format --check .` | aprovado (67 arquivos unchanged) |
 | `uv run ruff check .` | aprovado (All checks passed!) |
-| `uv run pytest tests/` | **262 aprovados**, 9 skipped (3 do `[optimization]` opcional), 0 failed |
+| `uv run --extra optimization --extra observability pytest tests/` | **276 aprovados**, 1 skip do cenário que exige ambiente sem extras, 0 falhas |
 | Política de privacidade | `"PRIVACY-CANARY-CARDIOVASCULAR..."` ausente de logs, body e métricas (assertions em `test_observability_privacy.py`) |
 | Cardinalidade Prometheus | apenas `route`, `method`, `status`, `model_variant`, `error_code` (+ `le` para buckets) |
 | `app.state.model_variant` | single-source via `lifespan`; helper `_model_variant` cai para `"sklearn"` em `TestClient` sem lifespan |

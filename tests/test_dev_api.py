@@ -140,6 +140,7 @@ def test_health_returns_validated_model_metadata(client: TestClient) -> None:
         "status": "ok",
         "model_version": VERSION,
         "model_loaded": True,
+        "model_variant": "sklearn",
     }
     assert response.headers["x-request-id"]
 

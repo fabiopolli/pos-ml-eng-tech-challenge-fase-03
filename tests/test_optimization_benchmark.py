@@ -34,7 +34,7 @@ class _FakePredictor:
 
         if self._latency_ms:
             time.sleep(self._latency_ms / 1000.0)
-        return [self._prediction]
+        return [self._prediction] * len(texts)
 
 
 def test_percentile_returns_a_value_between_min_and_max() -> None:
@@ -82,6 +82,24 @@ def test_benchmark_predictor_validates_arguments() -> None:
         benchmark_predictor(_FakePredictor(1), texts=["x"], repetitions=0, warmup=0, variant="x")
     with pytest.raises(ValueError):
         benchmark_predictor(_FakePredictor(1), texts=[], variant="x")
+    with pytest.raises(ValueError):
+        benchmark_predictor(_FakePredictor(1), texts=["x"], batch_size=0, variant="x")
+
+
+def test_benchmark_quality_uses_the_complete_evaluation_set() -> None:
+    result = benchmark_predictor(
+        _FakePredictor(1),
+        texts=["a", "b", "c"],
+        variant="onnx",
+        reference_predictions=[1, 1, 1],
+        reference_labels=[1, 2, 1],
+        repetitions=2,
+        warmup=0,
+    )
+
+    assert result.n_samples == 3
+    assert result.class_agreement == 1.0
+    assert result.macro_f1 is not None and result.macro_f1 < 1.0
 
 
 def test_capture_environment_handles_missing_optimization_groups() -> None:

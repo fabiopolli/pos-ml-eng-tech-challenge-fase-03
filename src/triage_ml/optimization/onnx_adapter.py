@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import Any, Literal, get_args
 
 import numpy as np
@@ -70,7 +71,7 @@ class OnnxModelAdapter:
     _session_obj: Any = field(default=None, init=False, repr=False, compare=False)
     _input_name: str = field(default="", init=False, repr=False, compare=False)
     _input_type: str = field(default="", init=False, repr=False, compare=False)
-    _load_lock_marker: bool = field(default=False, init=False, repr=False, compare=False)
+    _load_lock: Lock = field(default_factory=Lock, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not ONNXRUNTIME_AVAILABLE:
@@ -97,22 +98,27 @@ class OnnxModelAdapter:
             return self._session_obj
         if not ONNXRUNTIME_AVAILABLE:
             raise RuntimeError("onnxruntime is not installed; install the [optimization] group")
-        sess_options = ort.SessionOptions()
-        sess_options.intra_op_num_threads = 1
-        sess_options.inter_op_num_threads = 1
-        session = ort.InferenceSession(
-            str(self.onnx_path),
-            sess_options=sess_options,
-            providers=["CPUExecutionProvider"],
-        )
-        self._input_name = session.get_inputs()[0].name
-        self._input_type = str(session.get_inputs()[0].type or "")
-        # ``dataclasses.replace`` is used here to keep ``frozen=True``
-        # semantics — direct attribute assignment is rejected by frozen
-        # dataclasses.
-        object.__setattr__(self, "_session_obj", session)
-        object.__setattr__(self, "_load_lock_marker", True)
-        return session
+        with self._load_lock:
+            if self._session_obj is not None:
+                return self._session_obj
+            sess_options = ort.SessionOptions()
+            sess_options.intra_op_num_threads = 1
+            sess_options.inter_op_num_threads = 1
+            session = ort.InferenceSession(
+                str(self.onnx_path),
+                sess_options=sess_options,
+                providers=["CPUExecutionProvider"],
+            )
+            input_spec = session.get_inputs()[0]
+            object.__setattr__(self, "_input_name", input_spec.name)
+            object.__setattr__(self, "_input_type", str(input_spec.type or ""))
+            object.__setattr__(self, "_session_obj", session)
+            return session
+
+    def ensure_ready(self) -> None:
+        """Create and validate the runtime session without running inference."""
+
+        self._ensure_session()
 
     def _prepare(self, texts: list[str]) -> np.ndarray:
         """Adapt ``texts`` to the dtype/shape the ONNX session expects."""
@@ -151,18 +157,16 @@ class OnnxModelAdapter:
             empty_proba: np.ndarray = np.zeros((0, len(empty_classes)))
             return empty, empty_proba, []
 
-        labels, probabilities = self._run_once(texts)
+        labels, scores = self._run_once(texts)
         kinds: list[ScoreKind] = []
         for _index in range(len(labels)):
-            if probabilities is not None:
+            if scores is not None and self.classifier_kind == "logreg":
                 kinds.append("predict_proba")
-            else:
-                # LinearSVC + ONNX emits decision_function as logits but
-                # without a calibrated surface. The API surfaces the
-                # per-class margin so the sklearn and ONNX variants
-                # return the same ``score_kind``.
+            elif scores is not None and self.classifier_kind == "linear_svc":
                 kinds.append("decision_function")
-        return labels, probabilities, kinds
+            else:
+                kinds.append("absent")
+        return labels, scores, kinds
 
     def predict(self, texts: list[str]) -> np.ndarray:
         """Return the predicted label for each input text."""
@@ -183,8 +187,8 @@ class OnnxModelAdapter:
             return np.array([]).reshape(0, len(self.classes))
         if self.classifier_kind != "logreg":
             return None
-        _labels, probabilities = self._run_once(texts)
-        return probabilities
+        _labels, scores = self._run_once(texts)
+        return scores
 
     def score_for(self, texts: list[str], predicted_label: Any) -> tuple[float | None, ScoreKind]:
         """Return a confidence-like value for the predicted label.
@@ -202,18 +206,15 @@ class OnnxModelAdapter:
 
         if not texts:
             return None, "absent"
-        _labels, probabilities = self._run_once(texts)
+        _labels, scores = self._run_once(texts)
         try:
             index = list(self.classes).index(predicted_label)
         except ValueError:
             return None, "absent"
-        if probabilities is not None:
-            return float(probabilities[0][index]), "predict_proba"
-        # LinearSVC + ONNX has no probability surface; the caller is
-        # expected to read the per-class score from ``__call__`` and
-        # pass it to ``PredictOut.score`` instead. Returning None here
-        # keeps the API contract identical to the sklearn ``score is
-        # None`` behaviour when the model cannot produce probabilities.
+        if scores is not None and self.classifier_kind == "logreg":
+            return float(scores[0][index]), "predict_proba"
+        if scores is not None and self.classifier_kind == "linear_svc":
+            return float(scores[0][index]), "decision_function"
         return None, "absent"
 
     def _run_once(self, texts: list[str]) -> tuple[np.ndarray, np.ndarray | None]:
@@ -236,16 +237,16 @@ class OnnxModelAdapter:
             # ONNX sometimes returns a scalar; pad to per-text length.
             label_output = np.broadcast_to(label_output, (len(texts),)).reshape(-1)
 
-        probabilities: np.ndarray | None = None
+        scores: np.ndarray | None = None
         if len(outputs) >= 2:
             raw = np.asarray(outputs[1])
             if raw.ndim == 2 and raw.shape[1] == len(self.classes) and raw.shape[0] == len(texts):
-                probabilities = raw
+                scores = raw
 
         resolved: list[int] = []
         for index, value in enumerate(label_output):
-            resolved.append(self._resolve_label_index(int(value), probabilities, index, value))
-        return np.asarray(resolved, dtype=int), probabilities
+            resolved.append(self._resolve_label_index(int(value), scores, index, value))
+        return np.asarray(resolved, dtype=int), scores
 
     def _resolve_label_index(
         self,
@@ -258,24 +259,24 @@ class OnnxModelAdapter:
 
         Tries, in order:
 
-        1. Direct ``int`` index into ``self.classes`` (works when the model
-           was exported with ``zipmap=False`` and emits class indices).
-        2. Direct equality with a class id (works when the model emits
+        1. Direct equality with a class id (works when the model emits
            labels rather than indices).
+        2. Direct ``int`` index into ``self.classes`` (works when a model
+           explicitly emits zero-based class indices).
         3. Argmax over ``probabilities[example_index]`` (the skl2onnx
            fallback path).
         4. ``int(raw_value)`` as a last resort (still raises if the raw
            value is not coercible).
         """
 
+        if candidate in self.classes:
+            return int(candidate)
         if 0 <= candidate < len(self.classes):
             label = self.classes[candidate]
             try:
                 return int(label)
             except (TypeError, ValueError):
                 pass
-        if candidate in self.classes:
-            return int(candidate)
         if probabilities is not None:
             argmax = int(np.argmax(probabilities[example_index]))
             if 0 <= argmax < len(self.classes):
@@ -287,10 +288,10 @@ class OnnxModelAdapter:
     def close(self) -> None:
         """Release the cached ``InferenceSession`` and reset cached metadata."""
 
-        if self._session_obj is not None:
-            session = self._session_obj
-            object.__setattr__(self, "_session_obj", None)
-            object.__setattr__(self, "_input_name", "")
-            object.__setattr__(self, "_input_type", "")
-            object.__setattr__(self, "_load_lock_marker", False)
-            del session
+        with self._load_lock:
+            if self._session_obj is not None:
+                session = self._session_obj
+                object.__setattr__(self, "_session_obj", None)
+                object.__setattr__(self, "_input_name", "")
+                object.__setattr__(self, "_input_type", "")
+                del session

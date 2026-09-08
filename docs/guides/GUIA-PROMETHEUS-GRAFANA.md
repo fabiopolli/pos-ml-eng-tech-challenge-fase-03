@@ -23,7 +23,7 @@ Este guia cobre a stack de observabilidade (Fase 2 — Etapa 6), do scrape do Pr
                                                   └──────────────────┘
 ```
 
-- O Prometheus **scrapa** `/metrics` a cada 10 s em ambas as APIs.
+- O Prometheus **scrapa** `/metrics` a cada 5 s em ambas as APIs, com timeout de 4 s.
 - O Grafana **consome** o Prometheus via datasource provisionado em [`monitoring/grafana/provisioning/datasources/datasource.yml`](../../monitoring/grafana/provisioning/datasources/datasource.yml).
 - O dashboard é **provisionado automaticamente** em [`monitoring/grafana/dashboards/triage_ml.json`](../../monitoring/grafana/dashboards/triage_ml.json).
 - Cópia física do dashboard em [`reports/figures/triage_ml_dashboard.{json,png}`](../../reports/figures/) (geradas por [`scripts/render_observability_dashboard.py`](../../scripts/render_observability_dashboard.py)).
@@ -31,9 +31,9 @@ Este guia cobre a stack de observabilidade (Fase 2 — Etapa 6), do scrape do Pr
 ## Subir a stack
 
 ```bash
-# 1. Garantir .env com chaves da API e MODEL_PATH
+# 1. Garantir .env com chaves da API, versão do modelo e senha do Grafana
 cat > .env <<'EOF'
-API_MODEL_PATH=/models/20260905T171611Z-f2cb6f23f9cd/model.joblib
+MODEL_VERSION=20260905T171611Z-f2cb6f23f9cd
 TRIAGE_ML_API_KEY_SERVICE=svc-000000000000000000000000000000
 TRIAGE_ML_API_KEY_DOCTOR=doc-000000000000000000000000000000
 TRIAGE_ML_API_KEY_PATIENT=pat-000000000000000000000000000000
@@ -43,14 +43,15 @@ EOF
 # 2. Subir overlay de observabilidade (api-prod + api-onnx + prometheus + grafana)
 docker compose -f infra/docker-compose.yml up -d --wait
 
-# 3. Conferir saúde dos 4 serviços
+# 3. Conferir o estado dos serviços
 docker compose -f infra/docker-compose.yml ps
 
 # 4. Gerar tráfego benigno para popular os painéis
 uv run python scripts/generate_observability_traffic.py \
   --sklearn-url http://127.0.0.1:8001 \
   --onnx-url   http://127.0.0.1:8002 \
-  --api-key "$TRIAGE_ML_API_KEY_DOCTOR"
+  --api-key "$TRIAGE_ML_API_KEY_DOCTOR" \
+  --iterations 5
 
 # 5. Acessar
 #    Prometheus: http://localhost:9090
@@ -81,14 +82,14 @@ triage_ml_requests_total{
 
 ### `triage_ml_request_latency_seconds`
 
-Histograma com buckets `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]` segundos, rotulado pelos mesmos 4 labels. Soma em `_sum` e contagem em `_count`.
+Histograma com buckets `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]` segundos, rotulado por `route`, `method` e `model_variant`. Soma em `_sum` e contagem em `_count`.
 
 ```
 triage_ml_request_latency_seconds_bucket{
-  route="/predict", method="POST", status="200", model_variant="sklearn", le="0.025"
+  route="/predict", method="POST", model_variant="sklearn", le="0.025"
 } 800
 triage_ml_request_latency_seconds_bucket{
-  route="/predict", method="POST", status="200", model_variant="sklearn", le="0.05"
+  route="/predict", method="POST", model_variant="sklearn", le="0.05"
 } 1100
 triage_ml_request_latency_seconds_sum{...} 45.32
 triage_ml_request_latency_seconds_count{...} 1234
@@ -96,7 +97,7 @@ triage_ml_request_latency_seconds_count{...} 1234
 
 ### `triage_ml_prediction_errors_total`
 
-Counter rotulado por rota, `error_code` (allow-list público) e variante. Apenas as rotas `/predict` e `/reload` incrementam.
+Counter rotulado por rota, `error_code` (allow-list público) e variante. Apenas `/predict` incrementa.
 
 ```
 triage_ml_prediction_errors_total{
@@ -108,8 +109,8 @@ Allow-list público de `error_code` (válido como label Prometheus):
 
 ```
 validation_failed, text_too_short_for_language_check, indeterminate_language,
-unsupported_language, model_not_ready, model_not_found, model_incompatible,
-auth_missing, auth_invalid, rate_limited, request_failed
+unsupported_language, language_config_incompatible, model_not_ready,
+prediction_failed, unauthorized, forbidden, clinician_review_required, request_failed
 ```
 
 `internal_error` é deliberadamente **fora** da allow-list — não vaza como label Prometheus.
@@ -122,7 +123,7 @@ auth_missing, auth_invalid, rate_limited, request_failed
 histogram_quantile(
   0.95,
   sum by (le, model_variant) (
-    rate(triage_ml_request_latency_seconds_bucket{route="/predict"}[5m])
+    rate(triage_ml_request_latency_seconds_bucket{route="/predict", method="POST"}[5m])
   )
 )
 ```
@@ -151,16 +152,16 @@ sum by (model_variant) (rate(triage_ml_requests_total{route="/predict"}[1m]))
 
 ```promql
 histogram_quantile(0.95, sum by (le, model_variant) (
-  rate(triage_ml_request_latency_seconds_bucket{route="/predict"}[5m])
+  rate(triage_ml_request_latency_seconds_bucket{route="/predict", method="POST"}[5m])
 ))
 ```
 
 ### SLO: % de predições abaixo de 100 ms
 
 ```promql
-sum(rate(triage_ml_request_latency_seconds_bucket{le="0.1"}[5m]))
+sum(rate(triage_ml_request_latency_seconds_bucket{route="/predict", method="POST", le="0.1"}[5m]))
 /
-sum(rate(triage_ml_request_latency_seconds_count[5m]))
+sum(rate(triage_ml_request_latency_seconds_count{route="/predict", method="POST"}[5m]))
 ```
 
 ## Painéis do dashboard
@@ -183,13 +184,13 @@ Para alternar para p50 ou p99, edite o PromQL direto no painel.
 
 ### 3. `Prediction error rate`
 
-`sum by (error_code) (rate(triage_ml_prediction_errors_total[5m]))`. Bar gauge empilhado por `error_code`.
+Razão entre `rate(triage_ml_prediction_errors_total[5m])` e o total de requisições de `/predict`, agrupada por variante e `error_code`.
 
 Atenção: rotas `/health`, `/model-info`, `/models` e `/metrics` não entram nesse painel (não são rotas de predição).
 
 ### 4. `Baseline vs optimized (p95)`
 
-Tabela com p50/p95/p99 por `model_variant` consumindo o `reports/benchmarks/dataset_sizing.json` consolidado da Etapa 5.
+Tabela com p50/p95/p99 HTTP por `model_variant`, calculada pelo Prometheus apenas sobre `POST /predict`. O comparativo offline com macro-F1 permanece em `reports/benchmarks/dataset_sizing.json`.
 
 Quando o benchmark controlado rodar, a tabela reflete o `Δ macro-F1` aceitável (≤ 1 pp). Veja [Etapa_5_Otimizacao_do_modelo.md](../reports/Etapa_5_Otimizacao_do_modelo.md).
 
@@ -224,7 +225,7 @@ Para adicionar um dashboard novo sem rebuildar a imagem, basta montar o JSON em 
 ## Boas práticas
 
 - **Não usar `histogram_quantile` em série pequena** — a estimativa degrada com baixo volume; o painel de p95 só é confiável após ~100 samples.
-- **Não remover `le` ou `status`** dos PromQL — são labels obrigatórios para o `histogram_quantile` funcionar.
+- **Não remover `le`** dos PromQL de histograma; filtre `route="/predict"` e `method="POST"` para não misturar health checks e scrapes.
 - **Não adicionar labels além da allow-list** sem atualizar `tests/test_observability_privacy.py` e `tests/test_metrics_labels_respect_allowed_cardinality`.
 - **Não expor `/metrics` em produção final sem reverse proxy** — o endpoint está aberto na Fase 2 para inspeção; a Etapa 8 vai endurecer.
 - **Sempre correlacionar com `Server-Timing`** — para regressões finas de latência (ex.: `predict;dur` crescendo isolado), o header HTTP é mais granular que o histograma agregado do Prometheus.

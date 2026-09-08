@@ -9,9 +9,11 @@ on the metrics surface (registered samples) regardless of the extras.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 try:
     import prometheus_client  # noqa: F401
@@ -79,6 +81,14 @@ def test_normalise_route_keeps_cardinality_low() -> None:
     assert _normalise_route("/anything-else") == "/other"
 
 
+@pytest.mark.skipif(not HAVE_PROMETHEUS, reason="requires prometheus-client extra")
+def test_normalise_method_keeps_cardinality_low() -> None:
+    from triage_ml.observability.middleware import _normalise_method
+
+    assert _normalise_method("post") == "POST"
+    assert _normalise_method("CLIENT-CONTROLLED-123") == "OTHER"
+
+
 def test_prometheus_middleware_rejects_non_http_scope() -> None:
     """WebSocket and lifespan scopes must pass through untouched."""
 
@@ -113,3 +123,22 @@ def test_metrics_module_export_path_does_not_break_when_prometheus_missing() -> 
     assert inspect.isclass(observability.PrometheusMiddleware)
     assert "render_metrics" in observability.__all__
     assert Path(observability.__file__).is_file()
+
+
+def test_grafana_datasource_uid_and_predict_queries_are_consistent() -> None:
+    root = Path(__file__).parents[1]
+    datasource = yaml.safe_load(
+        (root / "monitoring/grafana/provisioning/datasources/datasource.yml").read_text()
+    )
+    dashboard = json.loads((root / "monitoring/grafana/dashboards/triage_ml.json").read_text())
+
+    assert datasource["datasources"][0]["uid"] == "prometheus"
+    for panel in dashboard["panels"]:
+        assert panel["datasource"]["uid"] == "prometheus"
+        for target in panel["targets"]:
+            expression = target["expr"]
+            if "request_latency_seconds_bucket" in expression:
+                assert 'route="/predict"' in expression
+                assert 'method="POST"' in expression
+    error_panel = next(panel for panel in dashboard["panels"] if "error rate" in panel["title"])
+    assert "group_left" in error_panel["targets"][0]["expr"]

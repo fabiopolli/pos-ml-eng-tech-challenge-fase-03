@@ -102,9 +102,10 @@ def _make_minimal_logreg_bundle(tmp_path: Path) -> Path:
             "test_split_sha256": "d" * 64,
             "config_sha256": "e" * 64,
         },
-        "checksum_sha256": "f" * 64,
+        "checksum_sha256": airflow_pipeline.file_sha256(version_dir / "model.joblib"),
         "created_at": "2026-01-01T00:00:00+00:00",
     }
+    (version_dir / "classes.json").write_text(json.dumps([1, 2, 3]), encoding="utf-8")
     (version_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     return version_dir
 
@@ -178,3 +179,33 @@ def test_export_onnx_for_version_emits_metadata_when_extras_available(
     assert payload["optimization"]["onnx_checksum_sha256"]
     assert payload["optimization"]["onnx_opset"] == 17
     assert (artifact_dir / "model.onnx").is_file()
+    persisted = json.loads((artifact_dir / "metadata.json").read_text(encoding="utf-8"))
+    assert persisted["available_variants"] == ["sklearn", "onnx"]
+    assert persisted["optimization"] == payload["optimization"]
+
+
+def test_export_manifest_and_registry_work_end_to_end(tmp_path: Path) -> None:
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    from triage_ml.optimization.registry import resolve_variant_loader
+
+    artifact_dir = _make_minimal_logreg_bundle(tmp_path)
+
+    first = airflow_pipeline.export_onnx_for_version(artifact_dir, opset=17)
+    adapter = resolve_variant_loader("onnx")(artifact_dir / "model.onnx")
+    predictions = adapter.predict(["cardiology abstract", "oncology abstract"])
+    second = airflow_pipeline.export_onnx_for_version(artifact_dir, opset=17)
+
+    assert len(predictions) == 2
+    assert set(int(value) for value in predictions).issubset({1, 2, 3})
+    assert first["reused"] is False
+    assert second["reused"] is True
+
+
+def test_promotion_requires_quality_and_latency_improvement() -> None:
+    baseline = {"macro_f1": 0.8, "latency_p95_ms": 10.0}
+    passing = {"macro_f1": 0.795, "latency_p95_ms": 5.0}
+    failing = {"macro_f1": 0.7, "latency_p95_ms": 12.0}
+
+    assert airflow_pipeline._promotion_result(baseline, passing)["eligible"] is True
+    assert airflow_pipeline._promotion_result(baseline, failing)["eligible"] is False

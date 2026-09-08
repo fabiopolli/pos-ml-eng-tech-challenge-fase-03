@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import yaml
+from airflow.exceptions import AirflowSkipException
 from airflow.sdk import dag, task
 
 from triage_ml.optimization.benchmark import (
@@ -85,8 +86,16 @@ def _sklearn_only_benchmark(version_dir: Path) -> dict:
     result = benchmark_predictor(predictor, texts=probe, variant="sklearn", repetitions=5, warmup=1)
     return {
         "model_version": version_dir.name,
+        "joblib": str(version_dir / "model.joblib"),
         "sklearn": result.to_dict(),
         "onnx": None,
+        "promotion": {
+            "eligible": False,
+            "quality_gate_passed": False,
+            "latency_gate_passed": False,
+            "delta_macro_f1_pp": None,
+            "speedup_p95": None,
+        },
     }
 
 
@@ -110,11 +119,14 @@ def triage_ml_retraining_optimization():
     raw_csv_path = os.environ.get("TRIAGE_RAW_CSV", "/opt/triage-ml/data/medical_tc_train.csv")
     config_path = os.environ.get("TRIAGE_TRAINING_CONFIG", "/opt/triage-ml/configs/training.yaml")
     models_dir = os.environ.get("TRIAGE_MODELS_DIR", "/opt/triage-ml/models")
-    figures_dir = os.environ.get("TRIAGE_REPORTS_DIR", "/opt/triage-ml/reports/figures")
+    figures_dir = os.environ.get("TRIAGE_FIGURES_DIR", "/opt/triage-ml/reports/figures")
+    configuration_for_slices = _dataset_sizing_from_config(config_path)
     require_auth_user, require_auth_token = _require_auth_credentials()
 
     @task(execution_timeout=timedelta(minutes=10))
     def ingest() -> dict:
+        if not _optimization_enabled():
+            raise AirflowSkipException("TRIAGE_OPTIMIZATION_ENABLED is false")
         return ingest_from_git(
             repository_url=repository_url,
             branch=branch,
@@ -129,11 +141,17 @@ def triage_ml_retraining_optimization():
         result = validate_dataset_file(ingestion["dataset_path"], config_path=config_path)
         if result["dataset_sha256"] != ingestion["dataset_sha256"]:
             raise ValueError("dataset changed between ingestion and validation")
+        oversized = [size for size in configuration_for_slices if size > result["eligible_rows"]]
+        if oversized:
+            raise ValueError(
+                "dataset_sizing entries exceed "
+                f"{result['eligible_rows']} eligible rows: {oversized}"
+            )
         return {**ingestion, **result}
 
     @task(execution_timeout=timedelta(hours=1))
     def train_slice(validated: dict, sample_size: int) -> dict:
-        return train_with_sample_size(
+        trained = train_with_sample_size(
             dataset_path=validated["dataset_path"],
             sample_size=sample_size,
             models_dir=models_dir,
@@ -141,6 +159,7 @@ def triage_ml_retraining_optimization():
             config_path=config_path,
             source_commit=validated["source_commit"],
         )
+        return {**trained, "dataset_path": validated["dataset_path"]}
 
     @task(execution_timeout=timedelta(minutes=10))
     def export_onnx_for_slice(training: dict) -> dict:
@@ -176,23 +195,39 @@ def triage_ml_retraining_optimization():
         if not _optimization_enabled() or optimized.get("optimization_skipped"):
             return _sklearn_only_benchmark(version_dir)
         try:
-            payload = benchmark_for_version(version_dir)
-        except RuntimeError:
-            return _sklearn_only_benchmark(version_dir)
-        return payload
+            payload = benchmark_for_version(
+                version_dir,
+                dataset_path=optimized["dataset_path"],
+                config_path=config_path,
+                sample_size=optimized["sample_size"],
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"benchmark failed for optimized slice {optimized['sample_size']}: {exc!s}"
+            ) from exc
+        return {**optimized, **payload}
 
     @task(execution_timeout=timedelta(minutes=5))
     def verify(slice_result: dict, sample_size: int) -> dict:
         from triage_ml.models.artifact import validate_artifact_bundle
 
         validate_artifact_bundle(slice_result["joblib"])
+        if (
+            _optimization_enabled()
+            and not slice_result.get("optimization_skipped")
+            and not slice_result.get("promotion", {}).get("eligible")
+        ):
+            raise RuntimeError(
+                f"ONNX promotion gates failed for slice {sample_size}: "
+                f"{slice_result.get('promotion')!r}"
+            )
         # Persist a per-slice payload so the comparison task can read it
         # back without relying on XCom (which would blow the 48 KB
         # default cap with many slices).
         payload_path = (
             Path(os.environ.get("TRIAGE_REPORTS_DIR", "/opt/triage-ml/reports"))
-            / "slices"
-            / f"{sample_size}.json"
+            / "benchmarks"
+            / f"optimization_{sample_size}.json"
         )
         _atomic_write_json(payload_path, {"sample_size": sample_size, **slice_result})
         return {"sample_size": sample_size, "payload_path": str(payload_path)}
@@ -201,7 +236,6 @@ def triage_ml_retraining_optimization():
     # concrete identities (``train_slice_5k``, ``benchmark_5k``, ...) rather
     # than dynamic mapping that this DAG factory does not implement.
     previous = validate(ingest())
-    configuration_for_slices = _dataset_sizing_from_config(config_path)
     verified_outputs: list = []
     for sample_size in configuration_for_slices:
         trained = train_slice.override(task_id=f"train_slice_{sample_size}")(previous, sample_size)
@@ -212,6 +246,7 @@ def triage_ml_retraining_optimization():
 
     @task(execution_timeout=timedelta(minutes=5))
     def compare_slices(verified_payloads: Iterable[dict]) -> dict:
+        verified_payloads = list(verified_payloads)
         rows: list[dict] = []
         for payload in verified_payloads:
             payload_path = Path(payload["payload_path"])
@@ -224,6 +259,7 @@ def triage_ml_retraining_optimization():
                     "model_version": slice_payload.get("model_version"),
                     "sklearn": slice_payload.get("sklearn"),
                     "onnx": slice_payload.get("onnx"),
+                    **(slice_payload.get("promotion") or {}),
                 }
             )
         ordered = sorted(rows, key=lambda row: row["sample_size"] or 0)
@@ -233,8 +269,13 @@ def triage_ml_retraining_optimization():
             / "dataset_sizing.json"
         )
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write_json(out_path, ordered)
-        return {"dataset_sizing_path": str(out_path), "rows": ordered}
+        environment = None
+        if verified_payloads:
+            first_payload = json.loads(Path(verified_payloads[0]["payload_path"]).read_text())
+            environment = first_payload.get("environment")
+        aggregate = {"environment": environment, "slices": ordered}
+        _atomic_write_json(out_path, aggregate)
+        return {"dataset_sizing_path": str(out_path), **aggregate}
 
     compare_slices(verified_outputs)
 

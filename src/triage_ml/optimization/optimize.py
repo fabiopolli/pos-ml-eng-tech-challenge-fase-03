@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,7 +135,12 @@ def export_onnx(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    options: dict[str, Any] = {"zipmap": False}
+    classifier = pipeline.named_steps["clf"]
+    options: dict[str, Any] = (
+        {id(classifier): {"zipmap": False}}
+        if type(classifier).__name__ == "LogisticRegression"
+        else {id(classifier): {"raw_scores": True}}
+    )
     if quantized:
         # Future-proofing: when skl2onnx ships a quantization helper we will
         # forward the relevant options here. For now we warn rather than
@@ -153,7 +160,19 @@ def export_onnx(
             target_opset=target_opset,
             options=options,
         )
-    onnx.save_model(str(out_path), onnx_model)
+    onnx.checker.check_model(onnx_model)
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{out_path.name}.", suffix=".tmp", dir=str(out_path.parent)
+    )
+    os.close(fd)
+    temporary_path = Path(temporary_name)
+    try:
+        onnx.save_model(onnx_model, temporary_path)
+        onnx.checker.check_model(str(temporary_path))
+        os.replace(temporary_path, out_path)
+    except Exception:
+        temporary_path.unlink(missing_ok=True)
+        raise
 
     fingerprint = fingerprint_dict(pipeline, opset=target_opset, quantized=False)
     return out_path, fingerprint

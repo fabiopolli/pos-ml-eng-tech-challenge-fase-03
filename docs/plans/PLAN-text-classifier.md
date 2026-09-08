@@ -292,7 +292,7 @@ src/triage_ml/
 │   └── benchmark.py           # benchmark controlado + relatório comparativo
 ├── optimization/              # nova fronteira dedicada
 │   ├── __init__.py
-│   ├── dataloader.py          # cortes 5K/10K/14K, delega para prepare_dataset
+│   ├── dataloader.py          # cortes 5K/6K/7K, delega para prepare_dataset
 │   └── registry.py            # resolve variant ativo (sklearn/onnx) para uma versão
 ├── observability/             # nova fronteira dedicada
 │   ├── __init__.py
@@ -312,7 +312,7 @@ airflow/dags/
 
 configs/
 ├── training.yaml              # MODIFICADO: lista `dataset_sizing` opcional
-└── training.sizing.yaml       # NOVO (opcional): catalogar cortes 5K/10K/14K
+└── training.sizing.yaml       # NOVO (opcional): catalogar cortes 5K/6K/7K
 
 monitoring/
 ├── prometheus/
@@ -336,7 +336,7 @@ tests/
 ├── test_model_optimization.py        # contrato ONNX, classes, macro-f1, Δ ≤ 1 pp
 ├── test_observability_metrics.py     # labels aceitas, ausência de text, /metrics
 ├── test_optimization_registry.py     # resolver variant ativo por versão
-├── test_optimization_dataloader.py   # cortes 5K/10K/14K chamam prepare_dataset
+├── test_optimization_dataloader.py   # cortes 5K/6K/7K chamam prepare_dataset
 └── test_observability_privacy.py      # smoke: text em logs/métricas/respostas
 
 reports/
@@ -491,7 +491,7 @@ Mapeados nas Etapas 5 e 6 do `docs/CHECKLIST.md`:
 8. `chore(deps): add optional [optimization] group with skl2onnx/onnxruntime`
 9. `feat(models): onnx export and adapter for sklearn/onnx variants`
 10. `test(models): cover onnx conversion, prediction agreement and macro-f1 tolerance`
-11. `feat(optimization): dataloader for 5K/10K/14K slices delegating to prepare_dataset`
+11. `feat(optimization): dataloader for 5K/6K/7K slices delegating to prepare_dataset`
 12. `feat(orchestration): extend airflow_pipeline with export_onnx and benchmark helpers`
 13. `feat(airflow): add triage_ml_retraining_optimization DAG reusing the Etapa 7 helpers`
 14. `feat(observability): prometheus metrics and middleware for the official API`

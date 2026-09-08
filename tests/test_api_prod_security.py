@@ -55,12 +55,21 @@ class DummyHolder:
     def loaded(self) -> bool:
         return self.pipeline is not None
 
-    def reload_to(self, version: str) -> str:
+    def reload_to(self, version: str, *, variant: str = "sklearn") -> str:
         self.model_version = version
         return version
 
     def snapshot(self) -> tuple[DummyPipeline | None, dict[str, str], dict[int, str], str]:
         return self.pipeline, self.metadata, self.label_names, self.model_version
+
+    def prediction_snapshot(
+        self, variant: str
+    ) -> tuple[DummyPipeline | None, dict[str, str], dict[int, str], str]:
+        return self.snapshot()
+
+    def ensure_variant_ready(self, variant: str) -> None:
+        if self.pipeline is None:
+            raise RuntimeError("model is not loaded")
 
 
 def make_settings(**overrides: str) -> Settings:

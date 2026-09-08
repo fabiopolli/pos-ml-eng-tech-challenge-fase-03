@@ -150,6 +150,7 @@ class ModelHolder:
         self.metadata: dict[str, Any] = {}
         self.label_names: dict[int, str] = {}
         self.model_version: str | None = None
+        self._onnx_predictor: Any = None
         self._lock = threading.RLock()
 
     def load(self) -> None:
@@ -164,9 +165,9 @@ class ModelHolder:
             self.metadata = metadata
             self.label_names = label_names
             self.model_version = metadata["model_version"]
-            self._onnx_predictor = None  # type: ignore[attr-defined]
+            self._onnx_predictor = None
 
-    def reload_to(self, version: str) -> str:
+    def reload_to(self, version: str, *, variant: str = "sklearn") -> str:
         """Atomically swap the holder to a different immutable artifact version.
 
         The new path is resolved against the holder's registry root and
@@ -187,6 +188,12 @@ class ModelHolder:
         # it returns the pipeline + metadata we need to publish.
         pipeline, metadata = load_artifact(new_path)
         label_names = {int(label): name for label, name in metadata["label_mapping"].items()}
+        onnx_predictor = None
+        if variant == "onnx":
+            from triage_ml.optimization.registry import resolve_variant_loader
+
+            onnx_predictor = resolve_variant_loader("onnx")(new_path.with_name("model.onnx"))
+            onnx_predictor.ensure_ready()
         with self._lock:
             self.pipeline = pipeline
             self.metadata = metadata
@@ -197,7 +204,7 @@ class ModelHolder:
             # concurrent ``/predict`` requests cannot keep using the
             # previous version's ``OnnxModelAdapter``. The next request
             # lazily rebuilds the adapter for the new artifact.
-            self._onnx_predictor = None  # type: ignore[attr-defined]
+            self._onnx_predictor = onnx_predictor
             return self.model_version
 
     def snapshot(self) -> tuple[Any, dict[str, Any], dict[int, str], str | None]:
@@ -205,6 +212,31 @@ class ModelHolder:
 
         with self._lock:
             return self.pipeline, self.metadata, self.label_names, self.model_version
+
+    def prediction_snapshot(
+        self, variant: str
+    ) -> tuple[Any, dict[str, Any], dict[int, str], str | None]:
+        """Return one predictor and its matching metadata under the holder lock."""
+
+        with self._lock:
+            predictor = self.pipeline
+            if variant == "onnx" and predictor is not None:
+                from triage_ml.optimization.registry import resolve_variant_loader
+
+                onnx_path = self.model_path.with_name("model.onnx")
+                if self._onnx_predictor is None or self._onnx_predictor.onnx_path != onnx_path:
+                    self._onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
+                predictor = self._onnx_predictor
+            return predictor, self.metadata, self.label_names, self.model_version
+
+    def ensure_variant_ready(self, variant: str) -> None:
+        """Fail unless the selected runtime variant can create its inference runtime."""
+
+        predictor, _, _, _ = self.prediction_snapshot(variant)
+        if predictor is None:
+            raise RuntimeError("model is not loaded")
+        if variant == "onnx":
+            predictor.ensure_ready()
 
     @property
     def loaded(self) -> bool:

@@ -161,7 +161,7 @@ def test_generate_observability_traffic_rejects_public_url(
 
 
 def test_resolve_api_key_falls_back_in_priority_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``_resolve_api_key`` honours ``DOCTOR`` → ``SERVICE`` → ``TRAFFIC_API_KEY`` → arg."""
+    """``_resolve_api_key`` accepts only doctor-compatible credentials."""
 
     from importlib import util
 
@@ -183,7 +183,7 @@ def test_resolve_api_key_falls_back_in_priority_order(monkeypatch: pytest.Monkey
     assert mod._resolve_api_key(_Args()) == "traffic-key"
 
     monkeypatch.setenv("TRIAGE_ML_API_KEY_SERVICE", "service-key")
-    assert mod._resolve_api_key(_Args()) == "service-key"
+    assert mod._resolve_api_key(_Args()) == "traffic-key"
 
     monkeypatch.setenv("TRIAGE_ML_API_KEY_DOCTOR", "doctor-key")
     assert mod._resolve_api_key(_Args()) == "doctor-key"

@@ -13,6 +13,12 @@ COPY src ./src
 RUN uv sync --frozen --no-dev --no-editable
 
 
+FROM builder AS builder-observability
+
+RUN uv sync --frozen --no-dev --no-editable \
+    --extra optimization --extra observability
+
+
 FROM python:3.12.11-slim-bookworm AS runtime-base
 
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -68,11 +74,7 @@ CMD ["uvicorn", "triage_ml.api.app:app", "--host", "0.0.0.0", "--port", "8000", 
 # ship ``runtime`` (no extras) so the Etapa 4 pipelines are not affected.
 FROM runtime-base AS runtime-observability
 
-# Install the optional extras declared in pyproject.toml so the build is
-# reproducible (``uv sync`` honours ``uv.lock`` rather than fetching
-# arbitrary versions from PyPI at build time).
-ENV TRIAGE_FASE2_EXTRAS="[optimization,observability]"
-RUN /app/.venv/bin/uv pip install --python /app/.venv/bin/python "triage-ml${TRIAGE_FASE2_EXTRAS}" 2>&1 | tail -1
+COPY --from=builder-observability --chown=10001:10001 /app/.venv /app/.venv
 
 EXPOSE 8000
 
@@ -80,3 +82,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
 
 CMD ["uvicorn", "triage_ml.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+
+
+# Keep an unqualified ``docker build .`` on the slim production runtime.
+FROM runtime AS default-runtime

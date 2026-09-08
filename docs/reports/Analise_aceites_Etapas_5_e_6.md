@@ -38,7 +38,7 @@ Esta análise cruza os itens prometidos nas três seções do checklist com a im
 | `src/triage_ml/optimization/` (5 módulos: `optimize`, `onnx_adapter`, `registry`, `dataloader`, `benchmark`) | ✅ | Diretório existe com os 5 módulos. |
 | DAG `triage_ml_retraining_optimization` (`airflow/dags/triage_retraining_optimization.py`) gated por `TRIAGE_OPTIMIZATION_ENABLED=false` (default) | ✅ | DAG existe; `_optimization_enabled()` lê env a cada invocação. |
 | Helpers em `airflow_pipeline.py`: `train_with_sample_size`, `_find_reusable_for_size`, `export_onnx_for_version`, `benchmark_for_version`, `build_optimization_manifest` | ✅ | Cobertos por `tests/test_airflow_optimization.py` (5 testes) + `test_train_with_sample_size.py` (3 testes). |
-| `configs/training.yaml` ganhou `dataset_sizing: [5000, 10000, 14000]` (mirror em `package_data`) | ✅ | Espelhado em `src/triage_ml/training.yaml`. |
+| `configs/training.yaml` usa `dataset_sizing: [5000, 6000, 7000]` (mirror em `package_data`) | ✅ | Os cortes respeitam as 7.489 linhas elegíveis e são espelhados em `src/triage_ml/training.yaml`. |
 | `pyproject.toml` registra `[optimization]` (`onnx`, `onnxruntime`, `skl2onnx`) | ✅ | Grupo opcional existe. |
 | ADR 0003 (`docs/adr/0003-flexibilizar-sample-size.md`) | ✅ | ADR existe. |
 | 27 novos testes | ✅ | 262 passed (229 baseline + 27 da Etapa 5 + 9 do 2º ciclo − reuso). |

@@ -68,13 +68,13 @@ docker compose up --build -d --wait api-prod
 
 # 3. Conferir saúde
 curl -s http://localhost:8000/health | jq
-# Esperado: { "status": "ok", "model_version": "20260101T000000Z-0123456789ab", "model_loaded": true }
+# Esperado: { "status": "ok", "model_version": "...", "model_loaded": true, "model_variant": "sklearn" }
 
 # 4. Encerrar
 docker compose down
 ```
 
-> **Variante ONNX (Fase 2)**: para comparar latência sklearn vs ONNX, suba também `api-onnx` via `infra/docker-compose.yml` e flip a variável `TRIAGE_ML_MODEL_VARIANT` no `api-prod` ou passe `?variant=onnx` no `POST /reload`. Detalhes completos em [GUIA-PROMETHEUS-GRAFANA.md](./GUIA-PROMETHEUS-GRAFANA.md).
+> **Variante ONNX (Fase 2)**: para comparar latência sklearn vs ONNX, use `infra/docker-compose.yml`, que sobe instâncias separadas com `TRIAGE_ML_MODEL_VARIANT=sklearn` e `onnx`. A variante é configuração de startup; `/reload` troca apenas a versão e valida a variante ativa.
 
 ### API de desenvolvimento via uvicorn
 
@@ -200,15 +200,14 @@ curl -s -X POST http://127.0.0.1:8000/reload \
   -d '{"model_version": "20251231T235959Z-fedcba987654"}' | jq
 ```
 
-Variante (Fase 2): `{"model_version": "...", "variant": "onnx"}` recarrega a versão sklearn e troca o adapter para ONNX. `variant=sklearn` reverte.
+A variante permanece a definida por `TRIAGE_ML_MODEL_VARIANT` no startup. Em uma instância ONNX, o reload só publica a nova versão depois de validar e inicializar também o `model.onnx` correspondente.
 
 Resposta (200):
 
 ```json
 {
   "model_version": "20251231T235959Z-fedcba987654",
-  "variant": "sklearn",
-  "reloaded_at": "2026-09-08T12:34:56Z"
+  "model_loaded": true
 }
 ```
 

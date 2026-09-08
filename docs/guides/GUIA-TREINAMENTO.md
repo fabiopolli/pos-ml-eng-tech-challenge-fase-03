@@ -243,29 +243,27 @@ Para comparar latência sklearn vs ONNX no dashboard Grafana:
 # 1. Instalar extra de otimização (uma vez)
 uv sync --dev --extra optimization
 
-# 2. Exportar (substitui model.onnx ao lado de model.joblib)
+# 2. Exportar e atualizar metadata.json com checksums/fingerprint
 uv run python -c "
-from joblib import load
-from triage_ml.optimization.optimize import export_onnx
-p = load('models/20260905T171611Z-f2cb6f23f9cd/model.joblib')
-export_onnx(p, 'models/20260905T171611Z-f2cb6f23f9cd/model.onnx', opset=17)
+from triage_ml.orchestration.airflow_pipeline import export_onnx_for_version
+export_onnx_for_version('models/20260905T171611Z-f2cb6f23f9cd', opset=17)
 "
 
 # 3. Conferir fingerprint em metadata.json
-jq '.optimization_fingerprint' models/20260905T171611Z-f2cb6f23f9cd/metadata.json
-# {"classifier_kind": "linear_svc", "opset": 17, "quantized": false,
+jq '.optimization.optimization_fingerprint' models/20260905T171611Z-f2cb6f23f9cd/metadata.json
+# {"classifier": "linear_svc", "opset": 17, "quantized": false,
 #  "fingerprint_hash": "abc1234567890def"}
 
-# 4. Trocar a variante na API oficial
+# 4. Recarregar uma API iniciada com TRIAGE_ML_MODEL_VARIANT=onnx
 curl -s -X POST http://localhost:8000/reload \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $TRIAGE_ML_API_KEY_SERVICE" \
-  -d '{"model_version": "20260905T171611Z-f2cb6f23f9cd", "variant": "onnx"}' | jq
+  -d '{"model_version": "20260905T171611Z-f2cb6f23f9cd"}' | jq
 ```
 
 ## Passo 6 — Automatizar via DAG (Etapa 7)
 
-A DAG `triage_ml_retraining` orquestra o ciclo completo (ingestão → validação → treino → publicação no DagsHub). Para a Fase 2, a DAG `triage_ml_retraining_optimization` itera sobre `dataset_sizing: [5000, 10000, 14000]` e materializa `optimization_<sample_size>.json` por fatia.
+A DAG `triage_ml_retraining` orquestra o ciclo completo (ingestão → validação → treino → publicação no DagsHub). Para a Fase 2, a DAG `triage_ml_retraining_optimization` itera sobre `dataset_sizing: [5000, 6000, 7000]` e materializa `optimization_<sample_size>.json` por corte.
 
 ```bash
 # Habilitar a DAG nova (default: false para preservar o stack da Etapa 7)

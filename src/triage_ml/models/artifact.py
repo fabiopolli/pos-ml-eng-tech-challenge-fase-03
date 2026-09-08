@@ -340,7 +340,11 @@ def validate_metadata(metadata: dict[str, Any]) -> None:
         if not math.isclose(candidate["std_macro_f1"], std, rel_tol=1e-9, abs_tol=1e-12):
             raise ValueError("metadata candidate std_macro_f1 disagrees with fold scores")
 
-    best_classifier = max(candidates, key=lambda name: candidates[name]["mean_macro_f1"])
+    # Keep the trainer's declared tie-break order. JSON key sorting must not
+    # change which classifier wins when CV means are equal.
+    best_classifier = max(
+        ("logreg", "linear_svc"), key=lambda name: candidates[name]["mean_macro_f1"]
+    )
     if selection.get("best_classifier") != best_classifier:
         raise ValueError("metadata.selection.best_classifier is inconsistent")
     policy = selection.get("selection_policy")

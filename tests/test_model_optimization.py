@@ -64,7 +64,7 @@ def test_export_onnx_writes_file_and_fingerprint(tmp_path: Path, fitted_pipeline
     assert out_path.stat().st_size > 0
     assert isinstance(fingerprint, OptimizationFingerprint)
     assert fingerprint.opset == 17
-    assert fingerprint.classifier == "LogisticRegression"
+    assert fingerprint.classifier == "logreg"
     assert fingerprint.quantized is False
     assert len(fingerprint_hash(fingerprint)) == 16
 
@@ -158,4 +158,15 @@ def test_onnx_adapter_predict_proba_returns_none_for_linear_svc(
 
     assert adapter.predict_proba(["any text here"]) is None
     score, kind = adapter.score_for(["any text here"], predicted_label=adapter.classes[0])
-    assert kind in {"decision_function", "absent"}
+    assert kind == "decision_function"
+    assert score is not None
+
+
+def test_onnx_adapter_prefers_non_zero_based_class_labels(tmp_path: Path) -> None:
+    from triage_ml.optimization.onnx_adapter import OnnxModelAdapter
+
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"placeholder")
+    adapter = OnnxModelAdapter(model_path, classes=(1, 2, 3), classifier_kind="logreg")
+
+    assert adapter._resolve_label_index(1, None, 0, 1) == 1

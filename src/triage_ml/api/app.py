@@ -40,6 +40,7 @@ from triage_ml.observability import (
     PrometheusMiddleware,
     render_metrics,
 )
+from triage_ml.observability.middleware import _normalise_route
 from triage_ml.optimization.registry import read_runtime_variant
 
 logger = structlog.get_logger("triage_ml.api")
@@ -86,7 +87,8 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
     async def lifespan(application: FastAPI):
         holder.load()
         _assert_language_consistency(holder)
-        application.state.model_variant = read_runtime_variant()
+        variant = read_runtime_variant()
+        application.state.model_variant = variant
         yield
 
     app = FastAPI(title="Triage ML - Prod API", lifespan=lifespan)
@@ -112,7 +114,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         structlog.contextvars.bind_contextvars(
             request_id=request_id,
             method=request.method,
-            path=request.url.path,
+            path=_normalise_route(request.url.path),
         )
 
         response = await call_next(request)
@@ -217,12 +219,19 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
     @app.get("/health", response_model=HealthOut)
     def health(request: Request):
         _, _, _, model_version = holder.snapshot()
+        variant = getattr(request.app.state, "model_variant", "sklearn")
+        try:
+            holder.ensure_variant_ready(variant)
+            model_ready = True
+        except (FileNotFoundError, RuntimeError, ValueError):
+            model_ready = False
         body = HealthOut(
-            status="ok" if holder.loaded else "degraded",
+            status="ok" if model_ready else "degraded",
             model_version=model_version,
-            model_loaded=holder.loaded,
+            model_loaded=model_ready,
+            model_variant=variant,
         )
-        if not holder.loaded:
+        if not model_ready:
             # Healthchecks must reflect readiness: an orchestrator routing
             # traffic to a container that cannot serve predictions would
             # amplify the failure. Returning 503 keeps Kubernetes/Compose
@@ -288,7 +297,8 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         role: str = Depends(RequireRole(["service"])),
     ):
         try:
-            version = holder.reload_to(payload.model_version)
+            variant = getattr(request.app.state, "model_variant", "sklearn")
+            version = holder.reload_to(payload.model_version, variant=variant)
             logger.info("model_reloaded", model_version=version, role=role)
             return ReloadOut(model_version=version, model_loaded=True)
         except FileNotFoundError as exc:
@@ -317,8 +327,13 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         _ = role  # already enforced by RequirePredictRole above
 
         req_id = _request_id_for(request)
-        pipeline, metadata, label_names, model_version = holder.snapshot()
-        if not pipeline:
+        variant = getattr(request.app.state, "model_variant", "sklearn")
+        try:
+            predictor, metadata, label_names, model_version = holder.prediction_snapshot(variant)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            request.state.error_code = "model_not_ready"
+            raise HTTPException(status_code=503, detail="model_not_ready") from exc
+        if not predictor:
             raise HTTPException(status_code=503, detail="model_not_ready")
 
         api_config = get_api_config()
@@ -347,60 +362,36 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         # slot em ``Server-Timing``).
         predict_start = time.perf_counter()
         try:
-            variant = getattr(request.app.state, "model_variant", "sklearn")
             if variant == "onnx":
-                from triage_ml.optimization.registry import (
-                    resolve_artifact_for_variant,
-                    resolve_variant_loader,
-                )
-
-                onnx_path = resolve_artifact_for_variant(holder.model_path.parent, "onnx")
-                if not onnx_path.is_file():
-                    # Distinguish "configuration missing" from "model failed"
-                    # so the client gets a transient 503 (model_not_ready)
-                    # instead of a hard 500. ``PredictionError`` is
-                    # separately tracked by the middleware.
-                    raise HTTPException(status_code=503, detail="model_not_ready")
-                # Singleton: fetch / build once, attach to the holder so
-                # subsequent ``/predict`` calls reuse the same
-                # InferenceSession (avoids the per-request memory leak
-                # caught in the post-Fase-2 review). Invalidation is
-                # owned by ``ModelHolder.reload_to`` which sets the
-                # attribute back to ``None`` whenever the registered
-                # version changes.
-                cached = getattr(holder, "_onnx_predictor", None)
-                if cached is None or getattr(cached, "onnx_path", None) != onnx_path:
-                    cached = resolve_variant_loader("onnx")(onnx_path)
-                    holder._onnx_predictor = cached  # type: ignore[attr-defined]
-                onnx_labels, onnx_proba, onnx_kinds = cached([payload.text])
+                onnx_labels, onnx_scores, onnx_kinds = predictor([payload.text])
                 label = int(onnx_labels[0])
-                if onnx_proba is not None and onnx_proba.size:
+                if onnx_scores is not None and onnx_scores.size and onnx_kinds[0] != "absent":
                     try:
-                        index = list(cached.classes).index(label)
+                        index = list(predictor.classes).index(label)
                     except ValueError:
                         score: float | None = None
                     else:
-                        score = float(onnx_proba[0][index])
+                        score = float(onnx_scores[0][index])
                 else:
                     score: float | None = None
             else:
-                label = int(pipeline.predict([payload.text])[0])
+                label = int(predictor.predict([payload.text])[0])
                 score: float | None = None
-                if hasattr(pipeline, "predict_proba"):
-                    proba = pipeline.predict_proba([payload.text])[0]
-                    index = list(pipeline.classes_).index(label)
+                if hasattr(predictor, "predict_proba"):
+                    proba = predictor.predict_proba([payload.text])[0]
+                    index = list(predictor.classes_).index(label)
                     score = float(proba[index])
-                elif hasattr(pipeline, "decision_function"):
+                elif hasattr(predictor, "decision_function"):
                     # LinearSVC (and friends) emit a decision_function but
                     # no calibrated probability surface. Surface the
                     # per-class margin so the contract is consistent
                     # across the sklearn and ONNX variants.
-                    margins = pipeline.decision_function([payload.text])[0]
-                    try:
-                        index = list(pipeline.classes_).index(label)
-                        score = float(margins[index])
-                    except (ValueError, TypeError):
+                    margins = predictor.decision_function([payload.text])
+                    if getattr(margins, "ndim", 1) == 1:
                         score = float(margins[0])
+                    else:
+                        index = list(predictor.classes_).index(label)
+                        score = float(margins[0][index])
         except HTTPException as exc:
             request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
             request.state.error_code = _resolve_error_code(exc.detail)

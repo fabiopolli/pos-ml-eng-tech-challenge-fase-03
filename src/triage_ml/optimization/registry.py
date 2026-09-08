@@ -12,12 +12,19 @@ and the ONNX loader is only invoked when the operator sets
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
+from triage_ml.models.artifact import (
+    ArtifactCompatibilityError,
+    ensure_no_symlink_ancestor,
+    file_sha256,
+    validate_artifact_bundle,
+)
 from triage_ml.optimization.onnx_adapter import OnnxModelAdapter, normalize_classifier_kind
 
 VariantName = Literal["sklearn", "onnx"]
@@ -56,6 +63,9 @@ def _load_onnx(onnx_path: Path) -> OnnxModelAdapter:
     helpful error if the manifest has zero or non-int labels.
     """
 
+    ensure_no_symlink_ancestor(onnx_path)
+    if onnx_path.is_symlink() or not onnx_path.is_file():
+        raise ArtifactCompatibilityError("model.onnx must be a regular file")
     metadata_path = onnx_path.with_name("metadata.json")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
 
@@ -65,9 +75,29 @@ def _load_onnx(onnx_path: Path) -> OnnxModelAdapter:
             f"metadata.json at {metadata_path} does not declare a non-empty 'classes' "
             f"list; got {classes_raw!r}"
         )
-    classes: tuple[int, ...] = tuple(int(label) for label in classes_raw)
+    if any(not isinstance(label, int) or isinstance(label, bool) for label in classes_raw):
+        raise ValueError("metadata.classes must contain only integer labels")
+    classes: tuple[int, ...] = tuple(classes_raw)
+    if len(classes) != len(set(classes)):
+        raise ValueError("metadata.classes must contain unique labels")
 
-    preprocessing_classifier = metadata.get("preprocessing", {}).get("classifier")
+    validated = validate_artifact_bundle(onnx_path.with_name("model.joblib"))
+    validate_variant_metadata(validated, variant="onnx")
+    optimization = validated.get("optimization")
+    if not isinstance(optimization, dict):
+        raise ArtifactCompatibilityError("metadata.optimization is required for the ONNX variant")
+    expected_checksum = optimization.get("onnx_checksum_sha256")
+    source_checksum = optimization.get("source_joblib_checksum_sha256")
+    if not isinstance(expected_checksum, str) or not hmac.compare_digest(
+        file_sha256(onnx_path), expected_checksum
+    ):
+        raise ArtifactCompatibilityError("model.onnx checksum does not match metadata")
+    if not isinstance(source_checksum, str) or not hmac.compare_digest(
+        source_checksum, validated["checksum_sha256"]
+    ):
+        raise ArtifactCompatibilityError("model.onnx was not exported from the active model.joblib")
+
+    preprocessing_classifier = validated.get("preprocessing", {}).get("classifier")
     classifier_kind = normalize_classifier_kind(preprocessing_classifier)
 
     return OnnxModelAdapter(

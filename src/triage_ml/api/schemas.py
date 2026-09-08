@@ -80,6 +80,7 @@ class HealthOut(BaseModel):
     status: Literal["ok", "degraded"]
     model_version: str | None = None
     model_loaded: bool
+    model_variant: Literal["sklearn", "onnx"] = "sklearn"
 
 
 class PredictOut(BaseModel):
