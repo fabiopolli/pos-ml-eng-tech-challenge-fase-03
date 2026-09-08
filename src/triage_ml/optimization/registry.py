@@ -18,7 +18,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
 
-from triage_ml.optimization.onnx_adapter import OnnxModelAdapter
+from triage_ml.optimization.onnx_adapter import OnnxModelAdapter, normalize_classifier_kind
 
 VariantName = Literal["sklearn", "onnx"]
 AVAILABLE_VARIANTS: tuple[VariantName, ...] = ("sklearn", "onnx")
@@ -51,13 +51,8 @@ def _load_onnx(onnx_path: Path) -> OnnxModelAdapter:
     metadata_path = onnx_path.with_name("metadata.json")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     classes = tuple(metadata["classes"])
-    preprocessing_classifier = str(metadata.get("preprocessing", {}).get("classifier", "unknown"))
-    classifier_kind: Literal["logreg", "linear_svc", "unknown"]
-    classifier_kind = (
-        preprocessing_classifier
-        if preprocessing_classifier in {"logreg", "linear_svc"}
-        else "unknown"
-    )
+    preprocessing_classifier = metadata.get("preprocessing", {}).get("classifier")
+    classifier_kind = normalize_classifier_kind(preprocessing_classifier)
     return OnnxModelAdapter(
         onnx_path=onnx_path,
         classes=classes,

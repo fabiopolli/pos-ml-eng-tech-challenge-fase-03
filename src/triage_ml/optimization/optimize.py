@@ -52,11 +52,27 @@ class OptimizationFingerprint:
         return {"classifier": self.classifier, "opset": self.opset, "quantized": self.quantized}
 
 
+CLASSIFIER_NAME_TO_KIND = {
+    "LogisticRegression": "logreg",
+    "LinearSVC": "linear_svc",
+}
+
+
 def fingerprint_dict(pipeline: Any, *, opset: int, quantized: bool) -> OptimizationFingerprint:
-    """Build the canonical fingerprint for a pipeline + export settings."""
+    """Build the canonical fingerprint for a pipeline + export settings.
+
+    The classifier is normalised to the same short identifier used by
+    ``metadata.preprocessing.classifier`` (``"logreg"``/``"linear_svc"``) so
+    fingerprints line up with the canonical artefact metadata without two
+    parallel naming conventions.
+    """
 
     classifier_name = pipeline.named_steps.get("clf", None)
-    classifier_kind = type(classifier_name).__name__ if classifier_name is not None else "unknown"
+    classifier_kind = "unknown"
+    if classifier_name is not None:
+        classifier_kind = CLASSIFIER_NAME_TO_KIND.get(
+            type(classifier_name).__name__, type(classifier_name).__name__
+        )
     return OptimizationFingerprint(
         classifier=classifier_kind, opset=opset, quantized=bool(quantized)
     )
@@ -117,7 +133,7 @@ def export_onnx(
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    options: dict[str, Any] = {}
+    options: dict[str, Any] = {"zipmap": False}
     if quantized:
         # Future-proofing: when skl2onnx ships a quantization helper we will
         # forward the relevant options here. For now we warn rather than

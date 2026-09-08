@@ -41,6 +41,42 @@ _ROUTE_TEMPLATES: tuple[tuple[str, str], ...] = (
     (r"^/$", "/"),
 )
 
+# Allow-list of public ``error_code`` values that may be used as a metric
+# label. Mirrors the values declared in
+# ``triage_ml.dev_api.app.ALLOWED_ERROR_CODES`` so the dashboard never
+# leaks an internal ``detail`` string (privacy regression test #1).
+_METRIC_ERROR_CODES = frozenset(
+    {
+        "model_not_ready",
+        "validation_failed",
+        "internal_error",
+        "prediction_failed",
+        "unsupported_language",
+        "clinician_review_required",
+        "unauthorized",
+        "forbidden",
+        "request_failed",
+    }
+)
+
+
+def _normalise_error_code(value: object) -> str | None:
+    """Validate ``error_code`` against the public allow-list.
+
+    Returns the normalised code (``strip()`` + ``lower()``) or ``None``
+    when the value falls outside the allow-list (intentionally dropped,
+    never silently coerced to a fake label).
+    """
+
+    if value is None:
+        return None
+    candidate = str(value).strip().lower()
+    if not candidate:
+        return None
+    if candidate not in _METRIC_ERROR_CODES:
+        return None
+    return candidate
+
 
 def _normalise_route(path: str) -> str:
     for pattern, template in _ROUTE_TEMPLATES:
@@ -52,10 +88,11 @@ def _normalise_route(path: str) -> str:
 def _model_variant(request: Request) -> str:
     """Return the active variant label recorded alongside metrics.
 
-    The middleware lives before ``create_app`` mounts the lifespan handler,
-    so the value falls back to ``"sklearn"`` when no variant has been
-    resolved yet. ``app.state.model_variant`` is set during startup so the
-    real value lands on the first business request.
+    The middleware reads ``app.state.model_variant`` set by the lifespan
+    handler; the fallback to ``"sklearn"`` covers the early life of the
+    app (before lifespan has run) and tests with ``TestClient`` without
+    the lifespan context. The normalization is single-source: this is the
+    only place the value falls back.
     """
 
     return getattr(request.app.state, "model_variant", "sklearn")
@@ -102,12 +139,17 @@ class PrometheusMiddleware:
             REQUEST_LATENCY_SECONDS.labels(
                 route=route, method=method, model_variant=variant
             ).observe(elapsed)
-            error_code = getattr(request.state, "error_code", None)
+            error_code_raw = getattr(request.state, "error_code", None)
+            error_code = _normalise_error_code(error_code_raw)
             if (
                 status_holder["status"] >= 400
                 and error_code
                 and PREDICTION_ERRORS_TOTAL is not None
             ):
+                # ``_normalise_error_code`` returns ``None`` when the value
+                # is outside the public allow-list; in that case we drop
+                # the increment silently rather than pollute the
+                # dashboard with arbitrary strings (hardening #19).
                 PREDICTION_ERRORS_TOTAL.labels(
-                    route=route, error_code=str(error_code), model_variant=variant
+                    route=route, error_code=error_code, model_variant=variant
                 ).inc()

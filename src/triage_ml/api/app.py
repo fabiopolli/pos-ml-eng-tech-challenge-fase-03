@@ -137,6 +137,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         # Log the failing fields server-side for observability without ever
         # echoing them to the client (avoids leaking the input shape).
         req_id = _request_id_for(request)
+        request.state.error_code = "validation_failed"
         structlog.contextvars.bind_contextvars(request_id=req_id)
         logger.info(
             "validation_failed",
@@ -193,6 +194,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
     @app.exception_handler(Exception)
     async def general_handler(request: Request, exc: Exception):
         req_id = _request_id_for(request)
+        request.state.error_code = "internal_error"
         # ``logger.exception`` rides on ``format_exc_info`` from
         # ``logging_config.setup_logging`` to surface the traceback.
         logger.exception("internal_error", error_type=type(exc).__name__)
@@ -329,6 +331,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
             request.state.detect_latency_ms = (time.perf_counter() - detect_start) * 1000.0
             request.state.detected_language = exc.code
             request.state.detected_language_score = exc.score
+            request.state.error_code = _resolve_error_code(exc.reason)
             raise HTTPException(status_code=422, detail=exc.reason) from exc
 
         request.state.detect_latency_ms = (time.perf_counter() - detect_start) * 1000.0
@@ -347,7 +350,23 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
                 )
 
                 onnx_path = resolve_artifact_for_variant(holder.model_path.parent, "onnx")
-                onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
+                if not onnx_path.is_file():
+                    # Distinguish "configuration missing" from "model failed"
+                    # so the client gets a transient 503 (model_not_ready)
+                    # instead of a hard 500. ``PredictionError`` is
+                    # separately tracked by the middleware.
+                    raise HTTPException(status_code=503, detail="model_not_ready")
+                # Singleton: fetch / build once, attach to the holder so
+                # subsequent ``/predict`` calls reuse the same
+                # InferenceSession (avoids the per-request memory leak
+                # caught in the post-Fase-2 review).
+                onnx_predictor = getattr(holder, "_onnx_predictor", None)
+                if (
+                    onnx_predictor is None
+                    or getattr(onnx_predictor, "onnx_path", None) != onnx_path
+                ):
+                    onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
+                    holder._onnx_predictor = onnx_predictor  # type: ignore[attr-defined]
                 label = int(onnx_predictor.predict([payload.text])[0])
                 score_value, _score_kind = onnx_predictor.score_for(
                     [payload.text], predicted_label=label
@@ -355,13 +374,45 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
                 score: float | None = score_value
             else:
                 label = int(pipeline.predict([payload.text])[0])
-                score = None
+                score: float | None = None
                 if hasattr(pipeline, "predict_proba"):
                     proba = pipeline.predict_proba([payload.text])[0]
                     index = list(pipeline.classes_).index(label)
                     score = float(proba[index])
+                elif hasattr(pipeline, "decision_function"):
+                    # LinearSVC (and friends) emit a decision_function but
+                    # no calibrated probability surface. Surface the
+                    # per-class margin so the contract is consistent
+                    # across the sklearn and ONNX variants.
+                    margins = pipeline.decision_function([payload.text])[0]
+                    try:
+                        index = list(pipeline.classes_).index(label)
+                        score = float(margins[index])
+                    except (ValueError, TypeError):
+                        score = float(margins[0])
+        except HTTPException as exc:
+            request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
+            request.state.error_code = _resolve_error_code(exc.detail)
+            if request.state.error_code == "model_not_ready":
+                # ``model_not_ready`` is a deferred error category
+                # surfaced by the lifespan or ONNX hot-path; do not
+                # double-log it as ``prediction_failed``.
+                logger.info(
+                    "model_not_ready",
+                    model_version=model_version,
+                    model_variant=variant,
+                )
+                raise
+            logger.error(
+                "prediction_failed",
+                error_type="HTTPException",
+                model_version=model_version,
+                model_variant=variant,
+            )
+            raise HTTPException(status_code=500, detail="prediction_failed") from exc
         except Exception as exc:
             request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
+            request.state.error_code = "prediction_failed"
             logger.error(
                 "prediction_failed",
                 error_type=type(exc).__name__,

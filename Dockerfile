@@ -68,7 +68,11 @@ CMD ["uvicorn", "triage_ml.api.app:app", "--host", "0.0.0.0", "--port", "8000", 
 # ship ``runtime`` (no extras) so the Etapa 4 pipelines are not affected.
 FROM runtime-base AS runtime-observability
 
-RUN /app/.venv/bin/pip install --no-cache-dir 'prometheus-client>=0.20,<1' 'onnx>=1.15,<2' 'onnxruntime>=1.17,<2' 'skl2onnx>=1.16,<2' 2>&1 | tail -1
+# Install the optional extras declared in pyproject.toml so the build is
+# reproducible (``uv sync`` honours ``uv.lock`` rather than fetching
+# arbitrary versions from PyPI at build time).
+ENV TRIAGE_FASE2_EXTRAS="[optimization,observability]"
+RUN /app/.venv/bin/uv pip install --python /app/.venv/bin/python "triage-ml${TRIAGE_FASE2_EXTRAS}" 2>&1 | tail -1
 
 EXPOSE 8000
 

@@ -10,11 +10,14 @@ non-clinical, and explicitly designed to never be stored server-side
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import sys
 import time
 import urllib.request
+from ipaddress import ip_address
+from urllib.parse import urlparse
 
 DEFAULT_SKL_URL = "http://127.0.0.1:8001"
 DEFAULT_ONX_URL = "http://127.0.0.1:8002"
@@ -30,20 +33,67 @@ def _build_samples() -> list[str]:
     ]
 
 
+def _enforce_loopback(url: str, *, role: str) -> None:
+    """Reject URLs pointing outside ``127.0.0.1``/``localhost`` to avoid SSRF drift."""
+
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError(f"{role} URL is missing a host: {url!r}")
+    try:
+        if ip_address(host).is_loopback:
+            return
+    except ValueError:
+        if host.lower() in {"localhost", "127.0.0.1", "::1"}:
+            return
+        # Resolved URL to public IP: deny
+        if host.lower() == "host.docker.internal":
+            return
+    if os.environ.get("TRIAGE_ALLOW_PUBLIC_OBSERVABILITY", "false").lower() != "true":
+        raise ValueError(
+            f"{role} URL must point to a loopback host; got {host!r}. "
+            "Set TRIAGE_ALLOW_PUBLIC_OBSERVABILITY=true to allow (not recommended)."
+        )
+
+
 def _post_json(url: str, payload: dict[str, str], *, api_key: str | None = None) -> tuple[int, str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
     body = urllib.request.Request(
         url,
-        data=str(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", **({"X-API-Key": api_key} if api_key else {})},
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
         method="POST",
     )
-    with urllib.request.urlopen(body, timeout=10) as response:  # noqa: S310 - URLs are operator-supplied
-        return response.status, response.read(1024).decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(body, timeout=10) as response:  # noqa: S310 - URL is operator-supplied loopback
+            return response.status, response.read(1024).decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:  # noqa: PERF203 - operator-facing report
+        return exc.code, exc.read(1024).decode("utf-8", errors="replace") if hasattr(
+            exc, "read"
+        ) else ""
 
 
 def _scrape_metrics(url: str) -> str:
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"unsupported metrics URL: {url!r}")
     with urllib.request.urlopen(url + "/metrics", timeout=5) as response:  # noqa: S310
         return response.read().decode("utf-8", errors="replace")
+
+
+def _resolve_api_key(args: argparse.Namespace) -> str:
+    """Pick the most appropriate API key (doctor first, service fallback)."""
+
+    for variable in (
+        "TRIAGE_ML_API_KEY_DOCTOR",
+        "TRIAGE_ML_API_KEY_SERVICE",
+        "TRIAGE_ML_TRAFFIC_API_KEY",
+    ):
+        value = os.environ.get(variable)
+        if value:
+            return value
+    return args.api_key
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,15 +104,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--onnx-url", default=os.environ.get("API_ONX_URL", DEFAULT_ONX_URL))
     parser.add_argument(
         "--api-key",
-        default=os.environ.get("TRIAGE_ML_API_KEY_DOCTOR"),
-        help="Doctor API key; falls back to env if omitted.",
+        default=os.environ.get("TRIAGE_ML_TRAFFIC_API_KEY"),
+        help="API key; TRIAGE_ML_API_KEY_DOCTOR/SERVICE/TRAFFIC_API_KEY env vars also accepted.",
     )
+    parser.add_argument("--role", choices=("doctor", "service"), default="doctor")
     parser.add_argument("--requests", type=int, default=20)
     args = parser.parse_args(argv)
 
+    args.api_key = _resolve_api_key(args) or ""
     if not args.api_key:
-        print("error: --api-key or TRIAGE_ML_API_KEY_DOCTOR is required", file=sys.stderr)
+        print("error: --api-key or TRIAGE_ML_API_KEY_* is required", file=sys.stderr)
         return 2
+
+    _enforce_loopback(args.sklearn_url, role="sklearn")
+    _enforce_loopback(args.onnx_url, role="onnx")
 
     samples = _build_samples()
     failure_count = 0
@@ -75,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
                     payload={"text": text},
                     api_key=args.api_key,
                 )
-            except Exception as exc:  # noqa: BLE001 - operator-facing report
+            except (TimeoutError, urllib.error.URLError, OSError) as exc:
                 print(f"warn: {target}/predict failed: {exc}", file=sys.stderr)
                 failure_count += 1
                 continue
@@ -87,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     for label, target in (("sklearn", args.sklearn_url), ("onnx", args.onnx_url)):
         try:
             payload = _scrape_metrics(target)
-        except Exception as exc:  # noqa: BLE001 - operator-facing report
+        except (TimeoutError, urllib.error.URLError, OSError) as exc:
             print(f"warn: scrape {label} failed: {exc}", file=sys.stderr)
             continue
         samples_observed = sum(

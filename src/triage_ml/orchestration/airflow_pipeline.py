@@ -386,7 +386,7 @@ def export_onnx_for_version(
     ``RuntimeError`` with an actionable message when the extras are missing.
     """
 
-    from triage_ml.optimization.optimize import export_onnx
+    from triage_ml.optimization.optimize import export_onnx, fingerprint_hash
 
     version = Path(version_dir)
     metadata = _read_metadata_for_version(version)
@@ -400,7 +400,7 @@ def export_onnx_for_version(
     onnx_path, fingerprint = export_onnx(pipeline, version / "model.onnx", opset=opset)
 
     optimization_fingerprint = fingerprint.to_dict()
-    optimization_fingerprint["fingerprint_hash"] = str(fingerprint)
+    optimization_fingerprint["fingerprint_hash"] = fingerprint_hash(fingerprint)
     optimization_record = {
         "onnx_path": str(onnx_path),
         "onnx_checksum_sha256": file_sha256(onnx_path),
@@ -445,23 +445,30 @@ def benchmark_for_version(
     from triage_ml.optimization.benchmark import (
         benchmark_predictor,
         capture_environment,
-        write_benchmark_json,
     )
-    from triage_ml.optimization.registry import resolve_variant_loader
+    from triage_ml.optimization.registry import (
+        resolve_variant_loader,
+        validate_variant_metadata,
+    )
+
+    if benchmark_input_size <= 0:
+        raise ValueError("benchmark_input_size must be > 0")
 
     version = Path(version_dir)
     metadata = _read_metadata_for_version(version)
     joblib_path = version / "model.joblib"
     onnx_path = version / "model.onnx"
 
+    # Single deserialisation of the sklearn bundle — both the reference
+    # predictions and the sklearn benchmark need it.
+    sklearn_pipeline = resolve_variant_loader("sklearn")(joblib_path)
     probe = _build_probe(benchmark_input_size)
     sklearn_reference = [
-        int(value) for value in np.asarray(_load_sklearn(joblib_path).predict(probe)).reshape(-1)
+        int(value) for value in np.asarray(sklearn_pipeline.predict(probe)).reshape(-1).tolist()
     ]
 
-    sklearn_predictor = resolve_variant_loader("sklearn")(joblib_path)
     sklearn_result = benchmark_predictor(
-        sklearn_predictor,
+        sklearn_pipeline,
         texts=probe,
         variant="sklearn",
         repetitions=10,
@@ -470,6 +477,13 @@ def benchmark_for_version(
 
     onnx_result = None
     if onnx_path.is_file():
+        try:
+            validate_variant_metadata(metadata, variant="onnx")
+        except ValueError:
+            # ``model.onnx`` exists but the metadata does not advertise it
+            # (rare — typically the export wrote only ``available_variants``).
+            # The benchmark still works without ``predict_proba`` surface.
+            pass
         try:
             onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
             onnx_result = benchmark_predictor(
@@ -481,29 +495,25 @@ def benchmark_for_version(
                 repetitions=10,
                 warmup=2,
             )
-        except RuntimeError:
-            # Optimization extras missing in the runtime environment; record
-            # the absence rather than failing the whole DAG.
+        except (RuntimeError, FileNotFoundError):
+            # Optimization extras missing in the runtime environment, or
+            # the .onnx disappeared between slice tasks; record the
+            # absence rather than failing the whole DAG.
             onnx_result = None
 
     environment = capture_environment()
-    aggregate_path = Path("reports/benchmarks/benchmark.json").resolve()
+    aggregate_path = _resolve_reports_path() / "benchmarks" / "benchmark.json"
     sibling_path = version / "benchmark.json"
     aggregate_path.parent.mkdir(parents=True, exist_ok=True)
-    write_benchmark_json(
-        aggregate_path,
-        sklearn_result=sklearn_result,
-        onnx_result=onnx_result,
-        environment=environment,
-        extra_metadata={"model_version": metadata["model_version"]},
-    )
-    write_benchmark_json(
-        sibling_path,
-        sklearn_result=sklearn_result,
-        onnx_result=onnx_result,
-        environment=environment,
-        extra_metadata={"model_version": metadata["model_version"]},
-    )
+    payload = {
+        "sklearn": sklearn_result.to_dict(),
+        "onnx": onnx_result.to_dict() if onnx_result is not None else None,
+        "environment": environment.to_dict(),
+        "extra_metadata": {"model_version": metadata["model_version"]},
+    }
+
+    _atomic_write_json(aggregate_path, payload)
+    _atomic_write_json(sibling_path, payload)
     return {
         "model_version": metadata["model_version"],
         "benchmark_paths": {"aggregate": str(aggregate_path), "sibling": str(sibling_path)},
@@ -512,10 +522,13 @@ def benchmark_for_version(
     }
 
 
-def _load_sklearn(joblib_path: Path) -> Any:
-    import joblib
+def _resolve_reports_path() -> Path:
+    """Resolve the canonical reports dir from ``TRIAGE_REPORTS_DIR``/CWD."""
 
-    return joblib.load(joblib_path)
+    raw = os.environ.get("TRIAGE_REPORTS_DIR")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return Path("reports").resolve()
 
 
 def _build_probe(size: int) -> list[str]:
@@ -554,6 +567,45 @@ def build_optimization_manifest(
     return payload
 
 
+def _effective_training_config(config_path: str | Path) -> dict[str, Any]:
+    """Read the ``configs/training.yaml`` file and return its content as dict."""
+
+    import yaml
+
+    with Path(config_path).open(encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def _slice_identity_fields(
+    config: dict[str, Any],
+    *,
+    sample_size: int,
+) -> dict[str, Any]:
+    """Pick the deterministic fields that drive ``run_training`` equivalence.
+
+    The optimization idempotency key is the tuple
+    ``(dataset_sha256, config_file_sha256, sample_size, random_state,
+    test_size, selected_classifier, task_type, language)``. The first three
+    are obvious; the rest matter because two runs with the same dataset
+    config but different seeds or classifiers would yield different
+    ``model.joblib`` outputs and the benchmark would compare apples to
+    oranges.
+    """
+
+    return {
+        "sample_size": sample_size,
+        "random_state": int(config["random_state"]),
+        "test_size": float(config["test_size"]),
+        "selected_classifier": str(
+            config.get("selection_overrides", {}).get("classifier")
+            or config.get("selected_classifier")
+            or config.get("logreg", {}).get("__default_classifier__", "logreg")
+        ),
+        "task_type": str(config.get("task_type", "multiclass_text_classification")),
+        "language": str(config.get("language", "en")),
+    }
+
+
 def train_with_sample_size(
     *,
     dataset_path: str | Path,
@@ -567,19 +619,22 @@ def train_with_sample_size(
 
     Used by the optimization DAG to materialise a version directory per
     ``dataset_sizing`` entry. The function is idempotent: when an existing
-    artifact shares ``(dataset_sha256, config_file_sha256, sample_size)``
-    the helper reuses it (mirroring ``train_evaluate_persist``).
+    artefact shares the slice identity (see ``_slice_identity_fields``) the
+    helper reuses it without re-running ``run_training``.
     """
 
     from triage_ml.models.train import run_training
 
     dataset_hash = file_sha256(dataset_path)
     config_hash = file_sha256(config_path)
+    config = _effective_training_config(config_path)
+    identity = _slice_identity_fields(config, sample_size=sample_size)
+
     existing = _find_reusable_for_size(
         models_dir,
         dataset_sha256=dataset_hash,
         config_file_sha256=config_hash,
-        sample_size=sample_size,
+        identity=identity,
     )
     if existing is not None:
         return existing
@@ -596,7 +651,7 @@ def train_with_sample_size(
         "dataset_sha256": dataset_hash,
         "config_file_sha256": config_hash,
         "source_commit": source_commit,
-        "sample_size": sample_size,
+        **identity,
     }
     _atomic_write_json(version_dir / "airflow_run.json", run_manifest)
     return {
@@ -613,15 +668,15 @@ def _find_reusable_for_size(
     *,
     dataset_sha256: str,
     config_file_sha256: str,
-    sample_size: int,
+    identity: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Find a prior artefact reusable for the requested ``sample_size``."""
+    """Find a prior artefact whose manifest declares the slice ``identity``.
 
-    base_reusable = find_reusable_artifact(
-        models_dir, dataset_sha256=dataset_sha256, config_file_sha256=config_file_sha256
-    )
-    if base_reusable is None:
-        return None
+    Loading the manifest is cheap (no ``.joblib`` re-validation); the
+    manifest is the contract of the slice. ``metrics`` come from the
+    manifest itself so the reused payload stays consistent.
+    """
+
     for manifest_path in sorted(Path(models_dir).glob("*/airflow_run.json"), reverse=True):
         if not VERSION_PATTERN.fullmatch(manifest_path.parent.name):
             continue
@@ -629,36 +684,24 @@ def _find_reusable_for_size(
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        if (
-            manifest.get("dataset_sha256") == dataset_sha256
-            and manifest.get("config_file_sha256") == config_file_sha256
-            and manifest.get("sample_size") == sample_size
-        ):
-            return {
-                "reused": True,
-                "model_version": manifest_path.parent.name,
-                "sample_size": sample_size,
-                "joblib": str(manifest_path.parent / "model.joblib"),
-                "metrics": base_reusable["metrics"],
-            }
+        if manifest.get("dataset_sha256") != dataset_sha256:
+            continue
+        if manifest.get("config_file_sha256") != config_file_sha256:
+            continue
+        if not all(manifest.get(key) == value for key, value in identity.items()):
+            continue
+        return {
+            "reused": True,
+            "model_version": manifest_path.parent.name,
+            "sample_size": identity["sample_size"],
+            "joblib": str(manifest_path.parent / "model.joblib"),
+            "metrics": manifest.get("metrics"),
+        }
     return None
 
 
-def export_onnx_for_version_dir(
-    version_dir: str | Path,
-    *,
-    opset: int = 17,
-) -> dict[str, Any]:
-    """Convenience wrapper exposing ``export_onnx_for_version`` as a DAG call."""
-
-    return export_onnx_for_version(version_dir, opset=opset)
-
-
-def benchmark_for_version_dir(
-    version_dir: str | Path,
-    *,
-    benchmark_input_size: int = 64,
-) -> dict[str, Any]:
-    """Convenience wrapper exposing ``benchmark_for_version`` as a DAG call."""
-
-    return benchmark_for_version(version_dir, benchmark_input_size=benchmark_input_size)
+# ``export_onnx_for_version_dir`` and ``benchmark_for_version_dir`` were
+# removed during the post-Fase-2 review (they were dead wrappers
+# duplicating ``export_onnx_for_version`` and ``benchmark_for_version``).
+# Callers (including the optimization DAG) import the canonical helpers
+# directly.

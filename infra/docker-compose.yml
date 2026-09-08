@@ -23,7 +23,7 @@ services:
       TRIAGE_ML_MODEL_VARIANT: sklearn
       MODEL_PATH: /models/${MODEL_VERSION:?Set MODEL_VERSION (e.g. 20260905T171611Z-f2cb6f23f9cd)}/model.joblib
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
     volumes:
       - ../models:/models:ro
     read_only: true
@@ -33,6 +33,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     init: true
     restart: unless-stopped
     networks:
@@ -54,7 +60,7 @@ services:
       TRIAGE_ML_MODEL_VARIANT: onnx
       MODEL_PATH: /models/${MODEL_VERSION:?Set MODEL_VERSION (e.g. 20260905T171611Z-f2cb6f23f9cd)}/model.joblib
     ports:
-      - "8002:8000"
+      - "127.0.0.1:8002:8000"
     volumes:
       - ../models:/models:ro
     read_only: true
@@ -64,6 +70,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
     init: true
     restart: unless-stopped
     networks:
@@ -73,12 +85,15 @@ services:
     image: prom/prometheus:v2.55.1
     volumes:
       - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --web.enable-lifecycle=false
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     cap_drop:
       - ALL
     security_opt:
@@ -98,18 +113,23 @@ services:
     volumes:
       - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
       - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
     restart: unless-stopped
     networks:
       - observability
+
+volumes:
+  prometheus-data:
+  grafana-data:
 
 networks:
   observability:
