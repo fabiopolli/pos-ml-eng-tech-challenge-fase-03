@@ -251,31 +251,38 @@ Mapeados na Etapa 2 do `docs/CHECKLIST.md`:
 
 # Fase 2 — Otimização + observabilidade (Etapas 5 e 6 do checklist)
 
-Pré-requisito: Fase 1 concluída e API oficial do Romário (Etapa 3) em estado de servir o artefato. Também depende do CI/Docker (Etapa 4) para que a stack Compose seja reprodutível.
+> **Revisão 2026-09-08 (Bill):** o plano da Fase 2 foi redesenhado a partir do estado real do projeto. As mudanças se justificam em três pontos que o usuário pediu para considerar: (a) o treino histórico foi feito com `sample_size=5_000` em `configs/training.yaml` mas o dataset bruto `data/medical_tc_train.csv` tem 14K linhas; (b) a **Etapa 7 (orquestração de retreino) já está concluída** e a DAG consome `triage_ml.models.train.run_training` — qualquer novo passo da Etapa 5 (cortes alternativos, export ONNX, quantização) precisa ser plugado nesse pipeline existente, sem duplicar lógica de preparação/treino; (c) a **API oficial (`src/triage_ml/api/app.py`, Romário)** é o consumidor real do artefato e é nela que `/metrics`, middleware Prometheus e flag `MODEL_VARIANT` devem operar, não na API de desenvolvimento. Estrutura modular `triage_ml.optimization`/`triage_ml.observability` é introduzida para essa separação.
 
 ## F2. Contexto e objetivo
 
 Entregar:
 
-1. Variante otimizada do classificador (ONNX, quantização ou pruning) com benchmark baseline vs otimizado **nas mesmas entradas e split**.
-2. Stack de observabilidade completa: `prometheus_client` na API, `prometheus.yml`, Grafana provisionado, Compose com as duas variantes da API + Prometheus + Grafana e dashboard versionado com painel extra "baseline vs otimizado".
-3. Garantia formal de que `text` nunca aparece em logs, payloads de erro ou labels de métrica.
+1. **Cortes adicionais do dataset** — incluir treino com 5K (linha de base atual, em uso pela Etapa 7), com 14K (dataset bruto completo) e, opcionalmente, com um corte intermediário (ex.: 10K) para comparar generalização vs. custo. A matriz de comparação é registrada em `reports/benchmarks/dataset_sizing.json` (ou tabela Markdown equivalente) e cada corte vira uma versão de artefato (`models/<versão>/`) no padrão existente.
+2. **Variante otimizada ONNX** — export via `skl2onnx.convert_sklearn` do pipeline canônico, salva em `models/<versão>/model.onnx`, com adapter que implementa o mesmo contrato (`predict`/`predict_proba` quando aplicável, `decision_function` quando não).
+3. **Plug no pipeline Airflow (Etapa 7)** — `train_evaluate_persist` ou um novo passo orquestrado chama `run_training` + `optimize.export_onnx` + `benchmark.compare` em uma única DAG (`triage_ml_retraining_optimization`, `schedule=None`), reaproveitando `find_reusable_artifact` para idempotência por hash e publicando `available_variants` em `metadata.json`.
+4. **Stack de observabilidade na API oficial** — `prometheus_client` no middleware FastAPI de `src/triage_ml/api/app.py`, endpoint `GET /metrics` sem autenticação nesta fase, label `model_variant={sklearn,onnx}` para comparativo.
+5. **Compose + Prometheus + Grafana** — `infra/docker-compose.yml` (overlay separado do `docker-compose.yml` de produção) sobe `api-sklearn`, `api-onnx`, `prometheus` e `grafana` provisionado com dashboard JSON.
+6. **Privacidade** — teste de fumaça que varre logs, métricas e respostas de erro de `/predict` para garantir que `text` jamais aparece. Política de não-retenção documentada.
 
 ## F2. Decisões de stack e justificativas
 
 | Decisão | Escolha | Justificativa |
 |---|---|---|
-| Técnica de otimização | Export **ONNX** via `skl2onnx.convert_sklearn` | Técnica vista em aula; uma prova antecipada valida a conversão do pipeline completo, incluindo TF-IDF |
-| Runtime ONNX | `onnxruntime` (CPU) | Backend acessado por adapter próprio com o mesmo contrato de predição do pipeline sklearn e `zipmap=False` |
-| Alternativa avaliada | Quantização dinâmica ONNX | Experimento secundário, sem pressupor compatibilidade ou ganho; avaliado na validação antes de promover |
-| Critério de aceitação | Δ macro-F1 ≤ 1 pp e redução ≥ 20% em p95 de latência no split de teste | Margem rígida contra regressão e piso razoável de ganho |
-| Métricas Prometheus | `prometheus_client` + middleware FastAPI próprio (sem `prometheus_fastapi_instrumentator` por padrão) | Controle sobre labels e buckets do histograma; instrumentator pode entrar depois se Romário quiser |
+| Cortes do dataset | 5K (atual), 14K (bruto) e opcional 10K | Comparar generalização real sem inflar custo de validação mais que o necessário; cada corte gera versão de artefato reutilizável |
+| Quem dispara os cortes | DAG `triage_ml_retraining_optimization` (Etapa 7 ampliada) | Idempotência via `find_reusable_artifact`; reaproveita `run_training` sem duplicar lógica |
+| Técnica de otimização | Export **ONNX** via `skl2onnx.convert_sklearn` (opset 17) | Vista em aula; `skl2onnx` cobre `Pipeline([TfidfVectorizer, LogReg/LinearSVC])` |
+| Runtime ONNX | `onnxruntime` (CPU) | Backend estável; adapter próprio com mesmo contrato de predição; `zipmap=False` |
+| Restrição do LinearSVC | Sem `predict_proba` nativo | Adapter expõe `decision_function` mapeada para classe; score do `PredictOut` vira opcional e documentado (escala de margem, não probabilidade) |
+| Quantização dinâmica | Avaliada como alternativa secundária na validação; só é promovida se ONNX puro não cumprir o piso de latência | Evita presumir compatibilidade antes de medir |
+| Critério de aceitação de latência | Δ p95 ≥ 20% (baseline sklearn vs. ONNX) **e** Δ macro-F1 ≤ 1 pp no mesmo split | Margem rígida contra regressão; medição controlada, não flakey |
+| Métricas Prometheus | `prometheus_client` + middleware FastAPI próprio | Controle sobre labels/buckets; sem `prometheus_fastapi_instrumentator` por padrão |
 | Labels aceitas | `route`, `method`, `status`, `model_variant` | Baixa cardinalidade; **nunca** `text`, `label_name`, `request_id` |
-| Buckets do histograma | `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5]` (s) | Cobre o range esperado para inferência TF-IDF |
-| Compose | `infra/docker-compose.yml` com `api-sklearn`, `api-onnx`, `prometheus` e `grafana` | Permite comparação simultânea das variantes e atende à stack local; alinhamento com o Dockerfile de Fábio é obrigatório |
-| Dashboard | JSON em `monitoring/grafana/dashboards/triage_ml.json` + print em `reports/figures/` | Reprocessamento via provisioning do Grafana |
+| Buckets do histograma | `[0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5]` (s) | Cobre o range esperado para TF-IDF |
+| Compose | `infra/docker-compose.yml` com `api-sklearn`, `api-onnx`, `prometheus` e `grafana` — overlay do `docker-compose.yml` de produção | Permite comparação simultânea das variantes sem misturar com o stack de produção |
+| Dashboard | JSON em `monitoring/grafana/dashboards/triage_ml.json` + print em `reports/figures/09_dashboard.png` | Reprocessamento via provisioning do Grafana |
+| Privacidade | Teste de fumaça em fixture local, sem abrir o dataset bruto | Mesmo padrão da Etapa 3; alinhado com LGPD |
 
-## F2. Estrutura de arquivos a criar (incremento sobre Fase 1)
+## F2. Estrutura de arquivos a criar/modificar (incremento sobre Fase 1 + Etapa 7)
 
 ```
 src/triage_ml/
@@ -283,160 +290,227 @@ src/triage_ml/
 │   ├── optimize.py            # export ONNX + quantização opcional
 │   ├── onnx_adapter.py        # interface comum para InferenceSession
 │   └── benchmark.py           # benchmark controlado + relatório comparativo
-└── monitoring/
-    ├── __init__.py
-    ├── metrics.py             # Counter/Histogram Prometheus compartilhados
-    └── middleware.py          # middleware FastAPI que mede e expõe
+├── optimization/              # nova fronteira dedicada
+│   ├── __init__.py
+│   ├── dataloader.py          # cortes 5K/10K/14K, delega para prepare_dataset
+│   └── registry.py            # resolve variant ativo (sklearn/onnx) para uma versão
+├── observability/             # nova fronteira dedicada
+│   ├── __init__.py
+│   ├── metrics.py             # Counter/Histogram Prometheus compartilhados
+│   └── middleware.py          # middleware FastAPI que mede e expõe
+└── api/                       # MODIFICAÇÕES para Fase 2
+    └── app.py                 # ganha /metrics + middleware + MODEL_VARIANT
+
+src/triage_ml/orchestration/
+└── airflow_pipeline.py        # AMPLIADO: novas funções export_onnx_for_version,
+                                # build_optimization_manifest, sem duplicar lógica
+
+airflow/dags/
+└── triage_retraining_optimization.py   # NOVA DAG: schedule=None, depende de
+                                          # ingest/validate/train/verify + export_onnx
+                                          # + benchmark + health-check ONNX
+
+configs/
+├── training.yaml              # MODIFICADO: lista `dataset_sizing` opcional
+└── training.sizing.yaml       # NOVO (opcional): catalogar cortes 5K/10K/14K
+
 monitoring/
 ├── prometheus/
 │   ├── prometheus.yml
-│   └── alerts.yml             (opcional, versão inicial sem)
+│   └── README.md              # (já existe)
 └── grafana/
     ├── provisioning/
     │   ├── datasources/datasource.yml
     │   └── dashboards/dashboards.yml
     └── dashboards/
         └── triage_ml.json
+
 infra/
-└── docker-compose.yml         # duas APIs + Prometheus + Grafana, usando Dockerfile alinhado com Fábio
+└── docker-compose.yml         # overlay: api-sklearn + api-onnx + prometheus + grafana
+
 scripts/
-└── generate_observability_traffic.py  # popula métricas sem persistir os textos
+├── benchmark_api.py           # já existe; ampliado para variant
+└── generate_observability_traffic.py  # popula métricas sem persistir textos
+
 tests/
-├── test_model_optimization.py
-└── test_monitoring_metrics.py
+├── test_model_optimization.py        # contrato ONNX, classes, macro-f1, Δ ≤ 1 pp
+├── test_observability_metrics.py     # labels aceitas, ausência de text, /metrics
+├── test_optimization_registry.py     # resolver variant ativo por versão
+├── test_optimization_dataloader.py   # cortes 5K/10K/14K chamam prepare_dataset
+└── test_observability_privacy.py      # smoke: text em logs/métricas/respostas
+
 reports/
 ├── benchmarks/
-│   └── benchmark.json         # evidência agregada e versionável, sem entradas
+│   ├── benchmark.json         # evidência agregada e versionável, sem entradas
+│   └── dataset_sizing.json    # comparação 5K vs. 10K vs. 14K
 └── figures/
     ├── 09_latency_comparison.png
+    ├── 09_sizing_comparison.png
     └── 09_dashboard.png
 ```
 
 ## F2. Contratos a cumprir
 
-Evolução dos contratos da Fase 1:
+Evolução dos contratos da Fase 1 e Etapa 7:
 
-- **Modelo otimizado**:
-  - Carrega via adapter sobre `onnxruntime.InferenceSession` com a mesma interface (`predict`/`predict_proba`) usada pelo pipeline sklearn.
-  - Variação escolhida em runtime por env var `MODEL_VARIANT=sklearn|onnx`.
-  - `metadata.json` declara `available_variants: ["sklearn", "onnx"]`, `checksum_sha256` do `model.onnx` e a versão fixa da variante ativa no treinamento. Os resultados detalhados de latência/qualidade ficam em `reports/benchmarks/benchmark.json`, evitando duas fontes divergentes.
-- **API**:
-  - Continua expondo `latency_ms`, `request_id`, `X-Request-ID`, `Server-Timing`.
-  - Acrescenta `/metrics` (Prometheus text format) servido pelo `prometheus_client.generate_latest`.
-  - `model_variant` aparece como **label** (não no body) para permitir comparativo via Prometheus.
+- **Modelo / artefato**:
+  - `metadata.json` ganha `available_variants: ["sklearn", "onnx"]`, `onnx_checksum_sha256`, `onnx_opset` e `selected_variant` (igual ao `selected_classifier` da Etapa 7).
+  - Se o classificador escolhido for `LinearSVC`, `score` em `PredictOut` permanece opcional; a métrica retornada é o `decision_function` da classe predita (margem, não probabilidade calibrada) — documentado em `metadata.preprocessing.classifier_score_kind = "decision_function" | "predict_proba"`.
+  - Idempotência: `find_reusable_artifact` da Etapa 7 é ampliada com `optimization_fingerprint` (configuração de export ONNX) para reuso de variantes ONNX já materializadas.
+- **API oficial (`src/triage_ml/api/app.py`)**:
+  - Variante ativa escolhida por env `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` (default `sklearn`), carregada no `lifespan`.
+  - Mantém `latency_ms`, `request_id`, `X-Request-ID`, `Server-Timing`.
+  - Nova rota `GET /metrics` (Prometheus text format) **sem** autenticação nesta fase; documentação cita que será revisitado na Etapa 8.
+  - `model_variant` aparece como **label** Prometheus (não no body) — `PredictOut` segue igual, evitando quebrar o contrato da Etapa 3.
 - **Observabilidade**:
   - Métricas: `triage_ml_requests_total{route,method,status,model_variant}`, `triage_ml_request_latency_seconds{route,method,model_variant}`, `triage_ml_prediction_errors_total{route,error_code,model_variant}`.
-  - **Sem** `text`, **sem** `label`, **sem** `request_id` em labels.
-- **Privacidade** (subseção nova da Etapa 6 do checklist):
-  - Teste automatizado varre respostas de erro, métricas e logs gerados em teste; falha se encontrar o **texto controlado da fixture** (string completa e trechos exclusivos), os campos `input`/`text` indevidos ou headers sensíveis. Asserção adicional: `metadata.json` é validado por schema e nenhum de seus campos contém texto do dataset. O teste **carrega apenas o fixture**, nunca o dataset bruto.
+  - **Sem** `text`, **sem** `label`, **sem** `request_id` em labels (verificado pelo teste de privacidade).
+- **Privacidade**:
+  - Política documentada: `text` é lido do request, classificado e descartado; nunca persistido, nunca copiado para log, nunca copiado para label de métrica, nunca retornado em payload de erro.
+  - Teste automatizado varre respostas de erro, métricas e logs gerados em teste; falha se encontrar o **texto controlado da fixture** (string completa e trechos exclusivos), os campos `input`/`text` indevidos ou headers sensíveis. `metadata.json` validado por schema: nenhum campo pode conter string que case com a fixture. O teste carrega apenas a fixture local; o dataset bruto **não** é aberto durante o teste.
 
 ## F2. Tarefas e sequência
 
-### F2.T1. Otimização ONNX
-- Fazer primeiro um spike de conversão do pipeline LR completo, incluindo `TfidfVectorizer`, e registrar limitações antes de implementar a abstração definitiva.
-- Declarar diretamente `skl2onnx`, `onnx` e `onnxruntime` em um grupo de dependências de otimização.
-- `optimize.py`: `export_onnx(pipeline, out_path, *, opset=17)` via `skl2onnx.convert_sklearn`.
-- `onnx_adapter.py`: normaliza entradas/saídas do `InferenceSession`, classes e scores sem alterar o contrato consumido pela API.
-- Restrição: `LinearSVC` precisa de wrapper para `predict_proba` (Calibrado) ou então expor apenas `decision_function` e mapear para classe. Documentar.
-- Salvar `models/<versão>/model.onnx`.
+### F2.T1. Cortes do dataset (5K / 10K / 14K) plugados no pipeline Airflow
+- Adicionar `dataset_sizing` em `configs/training.yaml` como lista opcional de inteiros (defaults `[5_000, 14_000]`; 10K entra só se o ambiente permitir).
+- `src/triage_ml/optimization/dataloader.py` expõe `iter_dataset_slices(config, *, base_csv)` que delega para `triage_ml.data.prepare.prepare_dataset` em cada tamanho (sem duplicar regras de exclusão/seed).
+- DAG `triage_ml_retraining_optimization` itera sobre os cortes; cada corte vira uma versão de artefato (`models/<YYYYMMDDTHHMMSSZ-<12hex>/`) no padrão da Etapa 7.
+- Cada corte roda o fluxo atual `validate → train → verify` da Etapa 7 (zero duplicação) e adiciona um passo `compare_slices` (F2.T7) que escreve `reports/benchmarks/dataset_sizing.json`.
 
-### F2.T2. Benchmark comparativo
-- Decisões entre ONNX puro e alternativa quantizada são feitas em validação. Depois de fixada a variante, o test set é usado para o comparativo final nas mesmas entradas e ordem.
+### F2.T2. Otimização ONNX
+- **Pré-condição**: spike em `notebooks/03_onnx_spike.ipynb` convertendo o pipeline atual (`TfidfVectorizer` + `LinearSVC` ou `LogisticRegression`) e medindo latência. Resultado do spike alimenta a decisão `LinearSVC` vs. `LogReg` no adapter.
+- Adicionar grupo de dependências opcional `[optimization]` em `pyproject.toml` com `skl2onnx`, `onnx`, `onnxruntime` (somente quando o `pip install -e .[optimization]` for usado pelo Airflow/Compose da Fase 2).
+- `optimize.py`: `export_onnx(pipeline, out_path, *, opset=17)` via `skl2onnx.convert_sklearn`; `optimization_fingerprint` calculado a partir do pipeline + `opset` + flag de quantização.
+- `onnx_adapter.py`:
+  - Implementa `predict(X)` igual ao pipeline sklearn (mesmo array de classes).
+  - Implementa `predict_proba(X)` **somente** quando o `metadata.preprocessing.classifier == "logreg"`; senão expõe `decision_function` mapeada para `PredictOut.score`.
+  - Carregamento preguiçoso: instancia `onnxruntime.InferenceSession` na primeira chamada para manter a inicialização barata.
+- Salvar `models/<versão>/model.onnx` ao lado de `model.joblib`; atualizar `metadata.json` com `onnx_checksum_sha256`, `onnx_opset`, `available_variants`.
+
+### F2.T3. Benchmark comparativo
 - `benchmark.py`: mede batch size 1 e retorna p50/p95/p99, média, throughput, tempo de carregamento, tamanho do artefato, macro-F1, concordância de classes e desvio máximo dos scores.
-- Metodologia fixa warmup, número de repetições, threads sklearn/ONNX e fronteira de medição incluindo TF-IDF + inferência, mas excluindo carregamento. Hardware, SO, Python, dependências e parâmetros são registrados.
-- Regenera o split a partir dos parâmetros da Fase 1, valida seus fingerprints, roda ambos `model.joblib` e `model.onnx` e escreve o resultado local em `models/<versão>/benchmark.json` e a evidência sem entradas em `reports/benchmarks/benchmark.json`.
+- Metodologia fixa: warmup, número de repetições, threads sklearn/ONNX, fronteira de medição (inclui TF-IDF + inferência, exclui carregamento), hardware/SO/Python/dependências/parâmetros registrados.
+- Regenera o split a partir dos parâmetros da Etapa 7, valida seus fingerprints, roda `model.joblib` e `model.onnx` no mesmo split e escreve `models/<versão>/benchmark.json` + `reports/benchmarks/benchmark.json` (evidência agregada, sem entradas).
 - Gera `reports/figures/09_latency_comparison.png` a partir do JSON versionável.
 
-### F2.T3. Critério "sem degradação inaceitável"
-- Testes determinísticos do CI validam conversão, shape, classes, concordância de predições e tolerância de qualidade (Δ macro-F1 ≤ 1 pp), sem impor limite de tempo dependente de hardware.
-- O benchmark controlado avalia redução ≥ 20% no p95, nas mesmas entradas e condições. O resultado é critério de promoção documentado, não teste unitário no runner compartilhado do GitHub Actions.
-- Se ONNX puro não cumprir o piso na validação, avaliar quantização; somente a alternativa fixada antes do teste final é usada como evidência oficial.
+### F2.T4. Critério "sem degradação inaceitável"
+- Testes determinísticos do CI validam: conversão ONNX ocorre, shape bate, classes batem, concordância de predições, Δ macro-F1 ≤ 1 pp. **Sem** limite de tempo dependente de hardware.
+- O benchmark controlado avalia Δ p95 ≥ 20%. Documentado como critério de promoção (não teste flakey).
+- Se ONNX puro não cumprir o piso na validação, avaliar quantização dinâmica; somente a alternativa fixada antes do teste final é usada como evidência oficial.
+- Custo do export e do carregamento ONNX é registrado e comparado ao caminho sklearn.
 
-### F2.T4. Instrumentação Prometheus
-- Declarar `prometheus-client` como dependência direta da aplicação.
-- `monitoring/metrics.py`:
+### F2.T5. Plug no pipeline Airflow (Etapa 7 ampliada)
+- Nova DAG `triage_ml_retraining_optimization` em `airflow/dags/triage_retraining_optimization.py`:
+  - `schedule=None`, `catchup=False`, `max_active_runs=1`, mesmo padrão de retries da DAG atual.
+  - Tasks: `ingest` → `validate` → `train_slice` (parametrizada por `sample_size`) → `export_onnx` → `benchmark` → `verify` → `compare_slices`.
+  - Reutiliza funções de `triage_ml.orchestration.airflow_pipeline` (idempotência por hash via `find_reusable_artifact`, manifest em `models/<versão>/airflow_run.json`).
+  - Variável nova `TRIAGE_OPTIMIZATION_ENABLED` (`false` por padrão) para o Compose atual da Etapa 7 (`docker-compose.airflow.yml`) continuar funcionando sem código novo de otimização.
+- `airflow_pipeline.py` ganha: `export_onnx_for_version(version_dir)`, `benchmark_for_version(version_dir)` e `build_optimization_manifest`. **Não** duplica `run_training`/`prepare_dataset`/`load_config`.
+
+### F2.T6. Instrumentação Prometheus
+- Adicionar `prometheus-client` em `pyproject.toml` (dependência principal da aplicação, mesmo grupo da FastAPI).
+- `src/triage_ml/observability/metrics.py`:
   - Define `REQUESTS_TOTAL`, `REQUEST_LATENCY_SECONDS`, `PREDICTION_ERRORS_TOTAL` com buckets e labels especificados.
-  - Função `render_metrics()` retorna o `generate_latest()` do registry próprio (não usar o registry global para evitar vazamento de métricas de bibliotecas).
-- `monitoring/middleware.py`:
-  - Middleware FastAPI que mede latência total, contabiliza erros com `error_code` genérico, e popula `Server-Timing` (já existente) e o histograma.
-- API oficial (Romário) ou o `app.py` da Fase 1 passa a usar esse middleware.
+  - Função `render_metrics()` retorna `generate_latest()` do registry **próprio** (não global) para evitar vazamento de bibliotecas.
+- `src/triage_ml/observability/middleware.py`:
+  - Middleware FastAPI medindo latência total, contabilizando erros com `error_code` genérico, e populando `Server-Timing` (já existente) **e** o histograma.
+- A **API oficial (`src/triage_ml/api/app.py`)** instala o middleware e expõe `/metrics`; a API de desenvolvimento e os fronts Streamlit **não** ganham Prometheus nesta fase (seria sombra).
 
-### F2.T5. Endpoint `/metrics`
-- Adicionar rota `GET /metrics` retornando `Response(content=render_metrics(), media_type=CONTENT_TYPE_LATEST)`.
-- Garantir que o endpoint **não** está atrás de autenticação nesta fase (será revisitado na Etapa 8).
+### F2.T7. Comparativo de dataset sizing
+- Após o loop da DAG, `compare_slices` agrega as métricas por `sample_size` e publica `reports/benchmarks/dataset_sizing.json` com `macro_f1`, `balanced_accuracy`, `latency_p50`, `latency_p95`, `latency_p99`, `artifact_size_kb`, e variante ONNX quando disponível.
+- Gera `reports/figures/09_sizing_comparison.png` (gráfico de barras por métrica).
+- Tabela vira evidência da Etapa 5 no checklist.
 
-### F2.T6. Compose, Prometheus e Grafana
+### F2.T8. Compose, Prometheus e Grafana
+- `infra/docker-compose.yml` (novo, overlay) com `api-sklearn`, `api-onnx`, `prometheus` e `grafana`. `api-sklearn` e `api-onnx` usam o mesmo `Dockerfile` da Etapa 4 mas com env `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` e portas distintas.
 - `monitoring/prometheus/prometheus.yml`: scrape de `api-sklearn:8000/metrics` e `api-onnx:8000/metrics` a cada 5 s.
-- `monitoring/grafana/provisioning/datasources/datasource.yml`: provisiona o Prometheus como datasource.
-- `monitoring/grafana/provisioning/dashboards/dashboards.yml`: provisiona o dashboard `triage_ml.json`.
-- `infra/docker-compose.yml`: serviços `api-sklearn`, `api-onnx`, `prometheus` e `grafana` na mesma rede, com variantes e portas documentadas. O Dockerfile da API é o mesmo nas duas instâncias.
+- `monitoring/grafana/provisioning/datasources/datasource.yml`: provisiona Prometheus.
+- `monitoring/grafana/provisioning/dashboards/dashboards.yml`: provisiona `triage_ml.json`.
 - `scripts/generate_observability_traffic.py`: envia carga controlada às duas APIs para popular o dashboard sem gravar textos, respostas ou request IDs.
+- README em `infra/` lista pré-requisitos e o comando único `docker compose -f infra/docker-compose.yml up -d --wait`.
 
-### F2.T7. Dashboard
+### F2.T9. Dashboard
 - Painéis mínimos:
   1. **Requisições por rota/status** (stat panel + gráfico de barras empilhadas).
   2. **Latência p95** (timeseries) com filtro `model_variant`.
-  3. **Taxa de erros** (stat panel).
+  3. **Taxa de erros** (stat panel) com filtro `error_code`.
   4. **Comparativo baseline vs otimizado** (table panel lendo `triage_ml_request_latency_seconds_bucket` filtrado por `model_variant`).
 - Print do dashboard em `reports/figures/09_dashboard.png`.
-- JSON canônico versionado em `monitoring/grafana/dashboards/triage_ml.json` e referenciado como evidência no checklist, sem cópia divergente em `reports/figures/`.
+- JSON canônico versionado em `monitoring/grafana/dashboards/triage_ml.json`; o print é apenas evidência visual.
 
-### F2.T8. Teste de privacidade
-- `tests/test_monitoring_metrics.py`: chama `/predict` com texto controlado (fixture pequena), captura logs, respostas de erro e métricas, e confirma que **nem o texto completo nem trechos exclusivos da fixture** aparecem em nenhum desses canais. Verifica também ausência de campos `input`/`text` em respostas e de headers sensíveis.
-- O teste carrega apenas a fixture local; o dataset bruto (`medical_tc_train.csv`, `medical_tc_test.csv`) **não** é aberto durante o teste, evitando leitura desnecessária do conteúdo clínico.
-- O `metadata.json` é validado por schema; nenhum dos seus campos pode conter string que case com a fixture.
+### F2.T10. Teste de privacidade
+- `tests/test_observability_privacy.py`: chama `/predict` com texto controlado (fixture pequena), captura logs, respostas de erro, métricas Prometheus e responses e confirma que **nem o texto completo nem trechos exclusivos da fixture** aparecem em nenhum desses canais. Verifica também ausência de campos `input`/`text` em respostas e de headers sensíveis.
+- O teste carrega apenas a fixture local; o dataset bruto **não** é aberto.
+- `metadata.json` é validado por schema; nenhum campo pode conter string que case com a fixture.
+- Adicionalmente, `tests/test_observability_metrics.py` valida que `/metrics` retorna `text/plain` no formato Prometheus, lista exatamente as métricas declaradas e nega qualquer label fora da whitelist.
 
-### F2.T9. Documentação
-- Atualizar `docs/CHECKLIST.md`: Etapa 5 e Etapa 6 marcadas com evidência (figuras, `benchmark.json`, JSON do dashboard, print).
-- Adicionar seção "Otimização e observabilidade" no `README.md` com comandos `docker compose up`, URLs locais e como ler o dashboard.
-- Atualizar `.agents/contracts/README.md` se a API ganhar `/metrics`.
+### F2.T11. Documentação
+- Atualizar `docs/CHECKLIST.md`: Etapas 5 e 6 marcadas com evidência (`benchmark.json`, `dataset_sizing.json`, JSON do dashboard, prints).
+- Adicionar seção "Otimização + observabilidade" no `README.md` com `docker compose -f infra/docker-compose.yml up -d --wait`, URLs locais e como ler o dashboard.
+- Atualizar `.agents/contracts/README.md` com `available_variants`, `MODEL_VARIANT` e `/metrics`.
+- Documentar política de não-retenção do `text` (Etapa 6) em `docs/papers/` ou `docs/adr/` (escolher quando uma das duas pastas ganhar uma entrada consistente).
 
 ## F2. Critérios de aceite
 
 Mapeados nas Etapas 5 e 6 do `docs/CHECKLIST.md`:
 
 **Etapa 5:**
-- [ ] Otimização aplicada (ONNX).
-- [ ] Baseline vs otimizado comparados nas mesmas entradas.
-- [ ] Melhoria de latência demonstrada (≥ 20% no p95) sem degradação inaceitável (Δ macro-F1 ≤ 1 pp).
+- [ ] Otimização aplicada (ONNX) com `model.onnx` salvo e `metadata.onnx_checksum_sha256` registrado.
+- [ ] Cortes 5K e 14K treinados, comparados no mesmo split, com `reports/benchmarks/dataset_sizing.json` versionado.
+- [ ] Comparativo baseline vs otimizado **e** 5K vs 14K, com Δ p95 ≥ 20% e Δ macro-F1 ≤ 1 pp no mesmo split.
 - [ ] `model.onnx` persistido localmente e `reports/benchmarks/benchmark.json` versionado como evidência agregada.
+- [ ] Variante ativa exposta pela API oficial via env `TRIAGE_ML_MODEL_VARIANT`.
+- [ ] Pipeline de retreino da Etapa 7 (`triage_ml_retraining` / `triage_ml_retraining_optimization`) cobre os novos passos sem duplicar lógica de `run_training`/`prepare_dataset`.
 
 **Etapa 6:**
-- [ ] Métricas `prometheus_client` expostas em `/metrics`.
-- [ ] Total de requisições por rota/status, latência e erros medidos.
+- [ ] Métricas `prometheus_client` expostas em `/metrics` da API oficial (`src/triage_ml/api/app.py`).
+- [ ] Total de requisições por rota/status, latência e erros medidos, com label `model_variant`.
 - [ ] Sem labels de alta cardinalidade e sem conteúdo clínico (teste automatizado).
-- [ ] Compose com as variantes sklearn/ONNX da API, Prometheus e Grafana.
+- [ ] `infra/docker-compose.yml` com `api-sklearn`, `api-onnx`, `prometheus` e `grafana`.
 - [ ] Dashboard JSON reprodutível com pelo menos 4 painéis (incluindo comparativo).
-- [ ] Print em `reports/figures/` e JSON canônico em `monitoring/grafana/dashboards/`.
+- [ ] Prints em `reports/figures/` e JSON canônico em `monitoring/grafana/dashboards/`.
+- [ ] Política de não-retenção do `text` documentada e teste de privacidade verde.
 
 ## F2. Riscos específicos
 
 | Risco | Mitigação |
 |---|---|
-| `skl2onnx` não converter o TF-IDF ou classificador escolhido | Fazer spike do pipeline completo no início de F2.T1; manter LR como caminho preferencial compatível e adapter isolado |
-| Latência ONNX não melhorar no ambiente controlado | Avaliar quantização somente na validação; registrar metodologia e resultado sem transformar benchmark de hardware em teste unitário flakey |
-| Dashboard divergir entre versões do Grafana | Fixar versão da imagem no Compose; testar provisionamento no CI quando possível |
-| `prometheus_client` registrar texto clínico acidentalmente | Teste de privacidade em F2.T8 + revisão de PR |
-| Compose local pesado para o time | Documentar pré-requisitos; CI só faz lint+pytest, não sobe Compose |
-| Dashboard vazio ou sem comparação simultânea | Executar duas instâncias da API e fornecer gerador de tráfego controlado para ambas as variantes |
+| `skl2onnx` não converter o `TfidfVectorizer` ou classificador escolhido | Spike no `notebooks/03_onnx_spike.ipynb` no início de F2.T2; registrar limitações antes da abstração definitiva; adapter isolado permite trocar a estratégia |
+| `LinearSVC` sem `predict_proba` nativo | Adapter expõe `decision_function` mapeada para classe; `PredictOut.score` permanece opcional e documentado como margem (não probabilidade) |
+| Latência ONNX não melhorar no ambiente controlado | Avaliar quantização somente na validação; registrar metodologia e resultado sem transformar o benchmark de hardware em teste unitário flakey |
+| Cortes 14K explodirem tempo/recursos da DAG | `dataset_sizing` em `configs/training.yaml` é editável; `TRIAGE_OPTIMIZATION_ENABLED=false` mantém o fluxo atual da Etapa 7; tamanhos podem ser ajustados sem mudar código |
+| Divergência entre a API oficial e a de desenvolvimento | Otimização e Prometheus operam **na oficial**; a de desenvolvimento fica inalterada nesta fase |
+| Dashboard divergir entre versões do Grafana | Fixar versão da imagem no Compose (`grafana:11.x`); testar provisioning no CI quando possível |
+| `prometheus_client` registrar texto clínico acidentalmente | Teste de privacidade em F2.T10 + revisão de PR |
+| Compose local pesado para o time | `infra/docker-compose.yml` é overlay separado do `docker-compose.yml` de produção; CI só faz lint+pytest, não sobe Compose |
+| Dashboard vazio ou sem comparação simultânea | Duas instâncias da API no Compose + `generate_observability_traffic.py` com carga controlada |
+| DAG quebrando o container da Etapa 7 | Novas tarefas atrás de `TRIAGE_OPTIMIZATION_ENABLED` (`false` por padrão); imagem da DAG só instala extras se a env estiver setada |
 
-## F2. Sequência de commits (Fase 2, em adição aos 5 da Fase 1)
+## F2. Sequência de commits (Fase 2, em adição aos 7+ das Fases 1 e 7)
 
-6. `feat(models): onnx export and latency benchmark for the baseline classifier`
-7. `test(models): validate onnx prediction compatibility and macro-f1 tolerance`
-8. `feat(monitoring): prometheus metrics middleware for /health and /predict`
-9. `feat(api): expose /metrics and ship prometheus + grafana compose`
-10. `feat(monitoring): provision grafana dashboard with baseline vs optimized panel`
-11. `test(monitoring): privacy regression test for logs and metric labels`
-12. `docs(models): document optimization, observability and dashboard usage`
+8. `chore(deps): add optional [optimization] group with skl2onnx/onnxruntime`
+9. `feat(models): onnx export and adapter for sklearn/onnx variants`
+10. `test(models): cover onnx conversion, prediction agreement and macro-f1 tolerance`
+11. `feat(optimization): dataloader for 5K/10K/14K slices delegating to prepare_dataset`
+12. `feat(orchestration): extend airflow_pipeline with export_onnx and benchmark helpers`
+13. `feat(airflow): add triage_ml_retraining_optimization DAG reusing the Etapa 7 helpers`
+14. `feat(observability): prometheus metrics and middleware for the official API`
+15. `feat(api): expose /metrics and load selected variant from TRIAGE_ML_MODEL_VARIANT`
+16. `feat(infra): overlay compose with api-sklearn, api-onnx, prometheus and grafana`
+17. `feat(monitoring): provision grafana dashboard with baseline-vs-optimized panel`
+18. `test(observability): privacy regression test for logs, metrics and error payloads`
+19. `docs(models): document optimization, observability and dashboard usage`
 
 ## F2. Definição de pronto da Fase 2
 
-- Etapas 5 e 6 marcadas como `[x]` no checklist, com evidência.
-- `uv run pytest` e `uv run ruff check .` verdes.
-- `docker compose up` sobe as duas variantes da API, Prometheus e Grafana; gerador de tráfego popula os 4 painéis.
-- Testes determinísticos de compatibilidade passam no CI e o critério de latência/qualidade é demonstrado em benchmark controlado com ambiente registrado.
-- `README.md` e `CHECKLIST.md` refletem o estado real.
+- Etapas 5 e 6 marcadas como `[x]` no `docs/CHECKLIST.md`, com evidência (`reports/benchmarks/benchmark.json`, `reports/benchmarks/dataset_sizing.json`, dashboard JSON e prints em `reports/figures/`).
+- `uv run pytest` (marcador `-m 'not e2e'`, mesmo padrão atual) e `uv run ruff check .` verdes.
+- `uv run pytest -m e2e` (Playwright) verdes para os fronts atualizados com `/metrics` e `MODEL_VARIANT` na sidebar.
+- `docker compose -f docker-compose.airflow.yml up` continua funcionando com `TRIAGE_OPTIMIZATION_ENABLED=false`.
+- `docker compose -f infra/docker-compose.yml up -d --wait` sobe as duas variantes da API, Prometheus e Grafana; `scripts/generate_observability_traffic.py` popula os 4 painéis.
+- Testes determinísticos de compatibilidade passam no CI; critério de latência/qualidade é demonstrado em benchmark controlado com ambiente registrado (sem virar teste flakey).
+- `README.md`, `.agents/contracts/README.md` e `docs/CHECKLIST.md` refletem o estado real (com `available_variants`, `MODEL_VARIANT`, `/metrics`, DAG de otimização e política de privacidade).
+
 
 ---
 
