@@ -6,7 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -34,6 +34,13 @@ from triage_ml.dev_api.app import (
 )
 from triage_ml.dev_api.config import get_api_config
 from triage_ml.dev_api.language import UnsupportedLanguageError, detect_language
+from triage_ml.observability import (
+    PROMETHEUS_AVAILABLE,
+    RENDER_CONTENT_TYPE,
+    PrometheusMiddleware,
+    render_metrics,
+)
+from triage_ml.optimization.registry import read_runtime_variant
 
 logger = structlog.get_logger("triage_ml.api")
 
@@ -76,12 +83,16 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         holder = ModelHolder(configured_path)
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI):
+    async def lifespan(application: FastAPI):
         holder.load()
         _assert_language_consistency(holder)
+        application.state.model_variant = read_runtime_variant()
         yield
 
     app = FastAPI(title="Triage ML - Prod API", lifespan=lifespan)
+    app.state.model_variant = read_runtime_variant()
+    if PROMETHEUS_AVAILABLE:
+        app.add_middleware(PrometheusMiddleware)  # type: ignore[arg-type]
     ip_limiter, api_key_limiter = create_limiters()
     app.state.limiter = ip_limiter
     app.state.api_key_limiter = api_key_limiter
@@ -154,6 +165,7 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
                 resolved_code=error_code,
                 status_code=exc.status_code,
             )
+        request.state.error_code = error_code
 
         message = "Request could not be processed."
         if error_code == "clinician_review_required":
@@ -248,6 +260,14 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
             versions=_list_model_versions(holder.registry_root), current=model_version
         )
 
+    @app.get("/metrics")
+    def metrics() -> Response:
+        """Prometheus scrape endpoint (open in Fase 2; revisitado na Etapa 8)."""
+
+        if not PROMETHEUS_AVAILABLE:
+            return Response(content=b"", media_type="text/plain")
+        return Response(content=render_metrics(), media_type=RENDER_CONTENT_TYPE)
+
     # =========================================================================
     # Operações Controladas (Requerem RBAC via API Key)
     # =========================================================================
@@ -319,18 +339,34 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         # slot em ``Server-Timing``).
         predict_start = time.perf_counter()
         try:
-            label = int(pipeline.predict([payload.text])[0])
-            score = None
-            if hasattr(pipeline, "predict_proba"):
-                proba = pipeline.predict_proba([payload.text])[0]
-                index = list(pipeline.classes_).index(label)
-                score = float(proba[index])
+            variant = getattr(request.app.state, "model_variant", "sklearn")
+            if variant == "onnx":
+                from triage_ml.optimization.registry import (
+                    resolve_artifact_for_variant,
+                    resolve_variant_loader,
+                )
+
+                onnx_path = resolve_artifact_for_variant(holder.model_path.parent, "onnx")
+                onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
+                label = int(onnx_predictor.predict([payload.text])[0])
+                score_value, _score_kind = onnx_predictor.score_for(
+                    [payload.text], predicted_label=label
+                )
+                score: float | None = score_value
+            else:
+                label = int(pipeline.predict([payload.text])[0])
+                score = None
+                if hasattr(pipeline, "predict_proba"):
+                    proba = pipeline.predict_proba([payload.text])[0]
+                    index = list(pipeline.classes_).index(label)
+                    score = float(proba[index])
         except Exception as exc:
             request.state.predict_latency_ms = (time.perf_counter() - predict_start) * 1000.0
             logger.error(
                 "prediction_failed",
                 error_type=type(exc).__name__,
                 model_version=model_version,
+                model_variant=variant,
             )
             raise HTTPException(status_code=500, detail="prediction_failed") from exc
 
