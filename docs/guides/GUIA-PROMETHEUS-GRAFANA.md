@@ -31,14 +31,11 @@ Este guia cobre a stack de observabilidade (Fase 2 — Etapa 6), do scrape do Pr
 ## Subir a stack
 
 ```bash
-# 1. Garantir .env com chaves da API, versão do modelo e senha do Grafana
-cat > .env <<'EOF'
-MODEL_VERSION=20260905T171611Z-f2cb6f23f9cd
-TRIAGE_ML_API_KEY_SERVICE=svc-000000000000000000000000000000
-TRIAGE_ML_API_KEY_DOCTOR=doc-000000000000000000000000000000
-TRIAGE_ML_API_KEY_PATIENT=pat-000000000000000000000000000000
-GRAFANA_ADMIN_PASSWORD=admin
-EOF
+# 1. Gerar .env a partir de um único comando (detecta o modelo mais recente em
+#    models/, gera secrets aleatórios via secrets.token_urlsafe(32), falha
+#    rápido se você não tiver modelo treinado). Equivalente a:
+#    MODEL_VERSION=...   TRIAGE_ML_API_KEY_*=...   GRAFANA_ADMIN_PASSWORD=...
+uv run python scripts/bootstrap_observability_overlay.py
 
 # 2. Subir overlay de observabilidade (api-prod + api-onnx + prometheus + grafana)
 docker compose -f infra/docker-compose.yml up -d --wait
@@ -50,18 +47,20 @@ docker compose -f infra/docker-compose.yml ps
 uv run python scripts/generate_observability_traffic.py \
   --sklearn-url http://127.0.0.1:8001 \
   --onnx-url   http://127.0.0.1:8002 \
-  --api-key "$TRIAGE_ML_API_KEY_DOCTOR" \
+  --api-key "$(grep '^TRIAGE_ML_API_KEY_DOCTOR=' .env | cut -d= -f2)" \
   --iterations 5
 
 # 5. Acessar
 #    Prometheus: http://localhost:9090
-#    Grafana:    http://localhost:3000  (admin / admin)
+#    Grafana:    http://localhost:3000  (admin / $GRAFANA_ADMIN_PASSWORD)
 
 # 6. Encerrar
 docker compose -f infra/docker-compose.yml down
 ```
 
 > **Por que dois containers da API?** Para isolar a comparação de latência sklearn vs ONNX no mesmo probe de carga, sem precisar de flags na API de produção. `api-sklearn` mantém `TRIAGE_ML_MODEL_VARIANT=sklearn` (default) e `api-onnx` fixa `TRIAGE_ML_MODEL_VARIANT=onnx`.
+>
+> **Armadilha frequente: `cat > .env <<EOF ... EOF` no shell.** Em alguns shells interativos o heredoc termina assim que você digita a primeira `EOF` solta, e o comando subsequente (`docker compose up`) lê um `.env` truncado. O `docker compose` então reclama `required variable MODEL_VERSION is missing a value`. Use sempre o helper [`scripts/bootstrap_observability_overlay.py`](../../scripts/bootstrap_observability_overlay.py) que escreve o arquivo de forma atômica e detecta automaticamente a versão do modelo em `models/`.
 
 ## Métricas expostas
 

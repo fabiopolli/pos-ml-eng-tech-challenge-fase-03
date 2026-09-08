@@ -51,17 +51,9 @@ Para criar um artefato novo do zero, veja [GUIA-TREINAMENTO.md](./GUIA-TREINAMEN
 ### API oficial via Docker Compose
 
 ```bash
-# 1. .env (substitua os placeholders — chaves com 32+ caracteres)
-cat > .env <<'EOF'
-API_MODEL_PATH=/models/20260101T000000Z-0123456789ab/model.joblib
-TRIAGE_ML_API_KEY_SERVICE=svc-000000000000000000000000000000
-TRIAGE_ML_API_KEY_DOCTOR=doc-000000000000000000000000000000
-TRIAGE_ML_API_KEY_PATIENT=pat-000000000000000000000000000000
-TRIAGE_ML_DASHBOARD_DOCTOR_USERNAME=medico-demo
-TRIAGE_ML_DASHBOARD_DOCTOR_PASSWORD=uma-senha-local
-TRIAGE_ML_DASHBOARD_PATIENT_USERNAME=paciente-demo
-TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD=outra-senha-local
-EOF
+# 1. Gerar .env a partir de um único comando (detecta o modelo mais recente em
+#    models/, gera secrets aleatórios via secrets.token_urlsafe(32))
+uv run python scripts/bootstrap_observability_overlay.py
 
 # 2. Subir apenas api-prod (portal é opcional para este guia)
 docker compose up --build -d --wait api-prod
@@ -74,7 +66,9 @@ curl -s http://localhost:8000/health | jq
 docker compose down
 ```
 
-> **Variante ONNX (Fase 2)**: para comparar latência sklearn vs ONNX, use `infra/docker-compose.yml`, que sobe instâncias separadas com `TRIAGE_ML_MODEL_VARIANT=sklearn` e `onnx`. A variante é configuração de startup; `/reload` troca apenas a versão e valida a variante ativa.
+> **Variante ONNX (Fase 2)**: para comparar latência sklearn vs ONNX, suba também `api-onnx` via `infra/docker-compose.yml` e flip a variável `TRIAGE_ML_MODEL_VARIANT` no `api-prod` ou passe `?variant=onnx` no `POST /reload`. Detalhes completos em [GUIA-PROMETHEUS-GRAFANA.md](./GUIA-PROMETHEUS-GRAFANA.md).
+>
+> **Armadilha frequente: `cat > .env <<EOF ... EOF` no shell.** Em alguns shells interativos o heredoc termina na primeira `EOF` solta, e o `docker compose` reclama `required variable X is missing a value`. Use sempre o helper [`scripts/bootstrap_observability_overlay.py`](../../scripts/bootstrap_observability_overlay.py).
 
 ### API de desenvolvimento via uvicorn
 

@@ -139,17 +139,15 @@ A API oficial ganhou:
 A stack overlay `infra/docker-compose.yml` sobe `api-sklearn`, `api-onnx`, Prometheus e Grafana em uma rede privada; o dashboard Grafana (provisionado em [`monitoring/grafana/dashboards/triage_ml.json`](monitoring/grafana/dashboards/triage_ml.json)) compara latência, taxa de erro e throughput por `model_variant`. O script [`generate_observability_traffic.py`](scripts/generate_observability_traffic.py) gera carga sintética benigna para popular os painéis sem precisar de payload clínico. As versões físicas do dashboard ficam em [`reports/figures/triage_ml_dashboard.{json,png}`](reports/figures/) (renderizadas por [`scripts/render_observability_dashboard.py`](scripts/render_observability_dashboard.py)).
 
 ```bash
-# Subir a stack overlay (Prometheus + Grafana + duas variantes da API)
-TRIAGE_ML_API_KEY_SERVICE=svc-"$(printf '0%.0s' {1..30})" \
-TRIAGE_ML_API_KEY_DOCTOR=doc-"$(printf '0%.0s' {1..30})" \
-TRIAGE_ML_API_KEY_PATIENT=pat-"$(printf '0%.0s' {1..30})" \
-MODEL_VERSION=20260101T000000Z-0123456789ab \
-GRAFANA_ADMIN_PASSWORD=admin \
+# Subir a stack overlay (Prometheus + Grafana + duas variantes da API).
+# O helper abaixo escreve .env com MODEL_VERSION detectado de models/ e
+# secrets aleatórios (secrets.token_urlsafe(32)).
+uv run python scripts/bootstrap_observability_overlay.py
 docker compose -f infra/docker-compose.yml up -d --wait
 docker compose -f infra/docker-compose.yml ps
 uv run python scripts/generate_observability_traffic.py \
   --sklearn-url http://127.0.0.1:8001 --onnx-url http://127.0.0.1:8002 \
-  --api-key "$TRIAGE_ML_API_KEY_DOCTOR"
+  --api-key "$(grep '^TRIAGE_ML_API_KEY_DOCTOR=' .env | cut -d= -f2)"
 # Acompanhar no Grafana (http://127.0.0.1:3000) e Prometheus (http://127.0.0.1:9090)
 docker compose -f infra/docker-compose.yml down
 ```
