@@ -96,13 +96,25 @@ def prepare_dataset(
 
     Exact normalized texts associated with multiple targets are excluded because
     automatically choosing one of their labels would not be defensible.
+
+    Contract:
+
+    * ``sample_size`` must be an integer ``>= 2_000``. The lower bound is the
+      smallest sample that still keeps every class above the documented
+      ``cv_folds`` default of 5 while remaining defensible as a benchmark
+      surface (see ADR 0003).
+    * There is no hard upper bound: callers may probe the full dataset
+      (Fase 2 — ``dataset_sizing``) up to the actual ``eligible_rows``.
+    * When ``sample_size > eligible_rows`` the function raises
+      ``ValueError``; when ``sample_size < eligible_rows`` the function
+      performs a stratified downsample.
     """
     if isinstance(sample_size, bool) or not isinstance(sample_size, int):
         raise ValueError("sample_size must be an integer")
     if isinstance(random_state, bool) or not isinstance(random_state, int):
         raise ValueError("random_state must be an integer")
-    if not 2_000 <= sample_size <= 5_000:
-        raise ValueError("sample_size must respect the project contract: 2,000 to 5,000")
+    if sample_size < 2_000:
+        raise ValueError("sample_size must be at least 2,000 (CV-folds per class contract)")
 
     data = _canonicalize(raw)
     valid = data["text"].notna() & data["text"].ne("") & data["target"].notna()

@@ -48,6 +48,18 @@ dev = [
     "jupyter>=1.0",
 ]
 
+# Optional groups — install with ``pip install -e .[optimization]`` or
+# ``.[observability]``. Kept opt-in so the production API image stays slim
+# (Etapas 1, 3, 4 and 7 do not depend on these groups).
+optimization = [
+    "onnx>=1.15,<2",
+    "onnxruntime>=1.17,<2",
+    "skl2onnx>=1.16,<2",
+]
+observability = [
+    "prometheus-client>=0.20,<1",
+]
+
 [tool.pytest.ini_options]
 addopts = "-ra -m 'not e2e'"
 testpaths = ["tests"]
