@@ -1,0 +1,95 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Fase 2 observability dashboard for the official Triage ML API.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Requests by route/status",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route, status) (rate(triage_ml_requests_total[1m]))",
+          "legendFormat": "{{route}} ({{status}})"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
+    },
+    {
+      "title": "Latency p95",
+      "type": "timeseries",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{model_variant}}"
+        }
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "title": "Prediction error rate",
+      "type": "stat",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 8},
+      "targets": [
+        {
+          "refId": "C",
+          "expr": "sum by (error_code) (rate(triage_ml_prediction_errors_total[5m]))",
+          "legendFormat": "{{error_code}}"
+        }
+      ],
+      "options": {"colorMode": "background", "reduceOptions": {"calcs": ["lastNotNull"]}}
+    },
+    {
+      "title": "Baseline vs optimized (p95)",
+      "type": "table",
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "gridPos": {"h": 8, "w": 18, "x": 6, "y": 8},
+      "targets": [
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.50, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{model_variant}}",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "E",
+          "expr": "histogram_quantile(0.95, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{model_variant}}",
+          "format": "table",
+          "instant": true
+        },
+        {
+          "refId": "F",
+          "expr": "histogram_quantile(0.99, sum by (le, model_variant) (rate(triage_ml_request_latency_seconds_bucket[5m])))",
+          "legendFormat": "p99 {{model_variant}}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "tags": ["ml", "triage-ml"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Triage ML — Optimization & Observability",
+  "uid": "triage-ml-observability",
+  "version": 1,
+  "weekStart": ""
+}
