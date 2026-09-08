@@ -164,6 +164,7 @@ class ModelHolder:
             self.metadata = metadata
             self.label_names = label_names
             self.model_version = metadata["model_version"]
+            self._onnx_predictor = None  # type: ignore[attr-defined]
 
     def reload_to(self, version: str) -> str:
         """Atomically swap the holder to a different immutable artifact version.
@@ -172,9 +173,13 @@ class ModelHolder:
         must obey the immutable version schema; ``load_artifact`` re-runs the
         full validation (manifest, checksum, classes) before the swap
         actually commits, so the holder never observes a half-loaded
-        state. Raises ``FileNotFoundError`` if the version is unknown
-        and propagates any ``RuntimeError`` from ``load_artifact`` when
-        the artifact is incompatible.
+        state. ``ModelHolder`` caches a single ``OnnxModelAdapter`` per
+        ``onnx_path``; the cache is invalidated **inside** the
+        ``self._lock`` block so concurrent ``/predict`` requests cannot
+        recycle the previous version's adapter. Raises
+        ``FileNotFoundError`` if the version is unknown and propagates any
+        ``RuntimeError`` from ``load_artifact`` when the artifact is
+        incompatible.
         """
 
         new_path = _validated_model_path(self.registry_root, version)
@@ -188,6 +193,11 @@ class ModelHolder:
             self.label_names = label_names
             self.model_version = metadata["model_version"]
             self.model_path = new_path
+            # Invalidate the ONNX adapter cache atomically with the swap so
+            # concurrent ``/predict`` requests cannot keep using the
+            # previous version's ``OnnxModelAdapter``. The next request
+            # lazily rebuilds the adapter for the new artifact.
+            self._onnx_predictor = None  # type: ignore[attr-defined]
             return self.model_version
 
     def snapshot(self) -> tuple[Any, dict[str, Any], dict[int, str], str | None]:

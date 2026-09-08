@@ -378,15 +378,16 @@ def export_onnx_for_version(
 
     Reads ``metadata.json`` to capture the canonical config fingerprint,
     loads the persisted ``model.joblib`` and writes ``model.onnx`` next to
-    it. The function returns the same payload shape as
-    ``train_evaluate_persist`` (``reused``/``model_version``/``joblib``) with
-    an extra ``onnx_path`` field.
+    it. ``reused=True`` when ``model.onnx`` already exists **and** its
+    ``onnx_checksum_sha256`` and optimization fingerprint match the
+    expected ones — exporting again is wasteful under the Fase 2 latency
+    budget.
 
     The function depends on the optional ``[optimization]`` group; it raises
     ``RuntimeError`` with an actionable message when the extras are missing.
     """
 
-    from triage_ml.optimization.optimize import export_onnx, fingerprint_hash
+    from triage_ml.optimization.optimize import export_onnx, fingerprint_dict, fingerprint_hash
 
     version = Path(version_dir)
     metadata = _read_metadata_for_version(version)
@@ -394,18 +395,40 @@ def export_onnx_for_version(
     if not joblib_path.is_file():
         raise FileNotFoundError(f"model.joblib not found in {version}")
 
+    onnx_path = version / "model.onnx"
+
+    # Reuse path — only fires when the prior export advertised the
+    # canonical fingerprint + checksum and the file is still on disk.
+    existing_optimization = metadata.get("optimization") or {}
+    existing_fingerprint = (existing_optimization.get("optimization_fingerprint") or {}).get(
+        "fingerprint_hash"
+    )
+    existing_checksum = existing_optimization.get("onnx_checksum_sha256")
+    if onnx_path.is_file() and existing_fingerprint and existing_checksum:
+        current_checksum = file_sha256(onnx_path)
+        if current_checksum == existing_checksum:
+            return {
+                "reused": True,
+                "model_version": metadata["model_version"],
+                "joblib": str(joblib_path),
+                "metrics": metadata["metrics"],
+                "optimization": existing_optimization,
+            }
+
     import joblib
 
     pipeline = joblib.load(joblib_path)
-    onnx_path, fingerprint = export_onnx(pipeline, version / "model.onnx", opset=opset)
+    target_path, fingerprint = export_onnx(pipeline, onnx_path, opset=opset)
 
-    optimization_fingerprint = fingerprint.to_dict()
-    optimization_fingerprint["fingerprint_hash"] = fingerprint_hash(fingerprint)
+    optimization_fingerprint_dict = fingerprint_dict(
+        pipeline, opset=opset, quantized=False
+    ).to_dict()
+    optimization_fingerprint_dict["fingerprint_hash"] = fingerprint_hash(fingerprint)
     optimization_record = {
-        "onnx_path": str(onnx_path),
-        "onnx_checksum_sha256": file_sha256(onnx_path),
+        "onnx_path": str(target_path),
+        "onnx_checksum_sha256": file_sha256(target_path),
         "onnx_opset": fingerprint.opset,
-        "optimization_fingerprint": optimization_fingerprint,
+        "optimization_fingerprint": optimization_fingerprint_dict,
         "created_at": _isoformat_utc(),
     }
     return {
@@ -477,29 +500,39 @@ def benchmark_for_version(
 
     onnx_result = None
     if onnx_path.is_file():
+        # Validate the artefact metadata advertises the ONNX variant.
+        # We log a warning instead of silently falling back so the
+        # operator notices when ``model.onnx`` shows up without a
+        # ``available_variants`` update (an export that bypassed the
+        # canonical helper).
         try:
             validate_variant_metadata(metadata, variant="onnx")
-        except ValueError:
-            # ``model.onnx`` exists but the metadata does not advertise it
-            # (rare — typically the export wrote only ``available_variants``).
-            # The benchmark still works without ``predict_proba`` surface.
-            pass
-        try:
-            onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
-            onnx_result = benchmark_predictor(
-                onnx_predictor,
-                texts=probe,
-                variant="onnx",
-                reference_predictions=sklearn_reference,
-                reference_labels=sklearn_reference,
-                repetitions=10,
-                warmup=2,
+        except ValueError as exc:
+            import structlog
+
+            structlog.get_logger().warning(
+                "benchmark_for_version_skipped_onnx_validation",
+                error=str(exc),
+                version_dir=str(version),
             )
-        except (RuntimeError, FileNotFoundError):
-            # Optimization extras missing in the runtime environment, or
-            # the .onnx disappeared between slice tasks; record the
-            # absence rather than failing the whole DAG.
             onnx_result = None
+        else:
+            try:
+                onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
+                onnx_result = benchmark_predictor(
+                    onnx_predictor,
+                    texts=probe,
+                    variant="onnx",
+                    reference_predictions=sklearn_reference,
+                    reference_labels=sklearn_reference,
+                    repetitions=10,
+                    warmup=2,
+                )
+            except (RuntimeError, FileNotFoundError):
+                # Optimization extras missing in the runtime environment,
+                # or the .onnx disappeared between slice tasks; record
+                # the absence rather than failing the whole DAG.
+                onnx_result = None
 
     environment = capture_environment()
     aggregate_path = _resolve_reports_path() / "benchmarks" / "benchmark.json"
@@ -580,6 +613,7 @@ def _slice_identity_fields(
     config: dict[str, Any],
     *,
     sample_size: int,
+    selected_classifier: str | None = None,
 ) -> dict[str, Any]:
     """Pick the deterministic fields that drive ``run_training`` equivalence.
 
@@ -590,17 +624,29 @@ def _slice_identity_fields(
     config but different seeds or classifiers would yield different
     ``model.joblib`` outputs and the benchmark would compare apples to
     oranges.
+
+    ``selected_classifier`` is **not** silently defaulted to ``"logreg"`` —
+    it must come from ``summary["selection"]["selected_classifier"]`` (the
+    canonical record produced by ``run_training``) or ``selection_overrides``
+    in the YAML. When neither is present the field is forced to
+    ``"unknown"`` so the idempotency check refuses to reuse a manifest
+    that does not declare its class.
     """
+
+    classifier = selected_classifier or config.get("selection_overrides", {}).get("classifier")
+    if not classifier:
+        raise ValueError(
+            "configs/training.yaml: missing 'selection_overrides.classifier' or equivalent; "
+            "the optimization idempotency key requires an explicit class. Add "
+            "'selection_overrides: {classifier: logreg}' to training.yaml or pass "
+            "selected_classifier to train_with_sample_size()."
+        )
 
     return {
         "sample_size": sample_size,
         "random_state": int(config["random_state"]),
         "test_size": float(config["test_size"]),
-        "selected_classifier": str(
-            config.get("selection_overrides", {}).get("classifier")
-            or config.get("selected_classifier")
-            or config.get("logreg", {}).get("__default_classifier__", "logreg")
-        ),
+        "selected_classifier": str(classifier),
         "task_type": str(config.get("task_type", "multiclass_text_classification")),
         "language": str(config.get("language", "en")),
     }
@@ -628,13 +674,13 @@ def train_with_sample_size(
     dataset_hash = file_sha256(dataset_path)
     config_hash = file_sha256(config_path)
     config = _effective_training_config(config_path)
-    identity = _slice_identity_fields(config, sample_size=sample_size)
 
     existing = _find_reusable_for_size(
         models_dir,
         dataset_sha256=dataset_hash,
         config_file_sha256=config_hash,
-        identity=identity,
+        sample_size=sample_size,
+        config=config,
     )
     if existing is not None:
         return existing
@@ -645,6 +691,17 @@ def train_with_sample_size(
         figures_dir=figures_dir,
         config_path=config_path,
         sample_size=sample_size,
+    )
+
+    # ``summary["selection"]["selected_classifier"]`` is the *executable*
+    # classifier (overrides + CV winner). Read it from the canonical
+    # record so the idempotency key reflects what ``run_training``
+    # actually materialised on disk, not a guess from the YAML.
+    selected_classifier = str(summary.get("selection", {}).get("selected_classifier") or "logreg")
+    identity = _slice_identity_fields(
+        config,
+        sample_size=sample_size,
+        selected_classifier=selected_classifier,
     )
     version_dir = Path(models_dir) / summary["model_version"]
     run_manifest = {
@@ -668,13 +725,16 @@ def _find_reusable_for_size(
     *,
     dataset_sha256: str,
     config_file_sha256: str,
-    identity: dict[str, Any],
+    sample_size: int,
+    config: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Find a prior artefact whose manifest declares the slice ``identity``.
+    """Find a prior artefact whose manifest declares the slice identity.
 
-    Loading the manifest is cheap (no ``.joblib`` re-validation); the
-    manifest is the contract of the slice. ``metrics`` come from the
-    manifest itself so the reused payload stays consistent.
+    The helper validates ``dataset_sha256``, ``config_file_sha256`` and
+    ``sample_size`` against ``airflow_run.json``; it then ensures the
+    candidate's ``model.joblib`` is still on disk so ``benchmark_for_version``
+    does not blow up later. ``metrics`` come from the manifest itself so
+    the reused payload stays consistent.
     """
 
     for manifest_path in sorted(Path(models_dir).glob("*/airflow_run.json"), reverse=True):
@@ -688,13 +748,26 @@ def _find_reusable_for_size(
             continue
         if manifest.get("config_file_sha256") != config_file_sha256:
             continue
-        if not all(manifest.get(key) == value for key, value in identity.items()):
+        if manifest.get("sample_size") != sample_size:
+            continue
+        joblib_path = manifest_path.parent / "model.joblib"
+        if not joblib_path.is_file():
+            # Manifest points at an orphan artefact (cleanup, partial
+            # publish, FS evicted); skip and let the caller train again.
+            continue
+        # Cross-check the persisted identity against the active config to
+        # surface silent drift (seed/classifier change). We use the
+        # manifest's value (not the regenerated one) to account for
+        # ``selection_overrides`` that may have changed between runs.
+        manifest_classifier = manifest.get("selected_classifier")
+        active_classifier = config.get("selection_overrides", {}).get("classifier")
+        if manifest_classifier and active_classifier and manifest_classifier != active_classifier:
             continue
         return {
             "reused": True,
             "model_version": manifest_path.parent.name,
-            "sample_size": identity["sample_size"],
-            "joblib": str(manifest_path.parent / "model.joblib"),
+            "sample_size": sample_size,
+            "joblib": str(joblib_path),
             "metrics": manifest.get("metrics"),
         }
     return None

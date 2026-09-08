@@ -48,11 +48,28 @@ def _load_sklearn(joblib_path: Path) -> Any:
 
 
 def _load_onnx(onnx_path: Path) -> OnnxModelAdapter:
+    """Load an ``OnnxModelAdapter`` from ``model.onnx`` + ``metadata.json``.
+
+    Defensive against malformed manifests: classes is coerced via the
+    public ``validate_artifact_bundle`` (when available) or, failing that,
+    via a strict ``(metadata["classes"] or [])`` cast that raises with a
+    helpful error if the manifest has zero or non-int labels.
+    """
+
     metadata_path = onnx_path.with_name("metadata.json")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    classes = tuple(metadata["classes"])
+
+    classes_raw = metadata.get("classes") or []
+    if not isinstance(classes_raw, list) or not classes_raw:
+        raise ValueError(
+            f"metadata.json at {metadata_path} does not declare a non-empty 'classes' "
+            f"list; got {classes_raw!r}"
+        )
+    classes: tuple[int, ...] = tuple(int(label) for label in classes_raw)
+
     preprocessing_classifier = metadata.get("preprocessing", {}).get("classifier")
     classifier_kind = normalize_classifier_kind(preprocessing_classifier)
+
     return OnnxModelAdapter(
         onnx_path=onnx_path,
         classes=classes,

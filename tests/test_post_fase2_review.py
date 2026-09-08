@@ -88,12 +88,13 @@ def test_normalise_error_code_lowercases_and_allowlists() -> None:
     from triage_ml.observability.middleware import _normalise_error_code
 
     assert _normalise_error_code("Validation_Failed") == "validation_failed"
-    assert _normalise_error_code(" internal_error ") == "internal_error"
+    assert _normalise_error_code(" model_not_ready ") == "model_not_ready"
     assert _normalise_error_code("model_not_ready") == "model_not_ready"
     assert _normalise_error_code(None) is None
     assert _normalise_error_code("") is None
     assert _normalise_error_code(12345) is None
     assert _normalise_error_code("non_allowlisted_code") is None
+    assert _normalise_error_code("internal_error") is None
 
 
 @pytest.mark.parametrize(
@@ -101,13 +102,17 @@ def test_normalise_error_code_lowercases_and_allowlists() -> None:
     [
         "model_not_ready",
         "validation_failed",
-        "internal_error",
         "prediction_failed",
         "unsupported_language",
         "clinician_review_required",
         "unauthorized",
         "forbidden",
         "request_failed",
+        "model_not_found",
+        "model_incompatible",
+        "text_too_short_for_language_check",
+        "indeterminate_language",
+        "language_config_incompatible",
     ],
 )
 def test_normalise_error_code_accepts_public_codes(code: str) -> None:
@@ -250,18 +255,53 @@ def test_train_with_sample_size_idempotency_includes_random_state(
 
     from triage_ml.orchestration.airflow_pipeline import _slice_identity_fields
 
-    cfg_a = {
+    base = {
+        "random_state": 7,
+        "test_size": 0.2,
+        "task_type": "multiclass_text_classification",
+        "language": "en",
+        "selection_overrides": {"classifier": "logreg"},
+    }
+
+    ident_a = _slice_identity_fields(base, sample_size=5_000)
+    base_shifted = dict(base)
+    base_shifted["random_state"] = 42
+    ident_b = _slice_identity_fields(base_shifted, sample_size=5_000)
+
+    assert ident_a["random_state"] == 7
+    assert ident_b["random_state"] == 42
+    assert ident_a != ident_b
+
+
+def test_slice_identity_fields_rejects_missing_classifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_slice_identity_fields`` must refuse config without an explicit classifier."""
+
+    from triage_ml.orchestration.airflow_pipeline import _slice_identity_fields
+
+    cfg = {
         "random_state": 7,
         "test_size": 0.2,
         "task_type": "multiclass_text_classification",
         "language": "en",
     }
-    cfg_b = dict(cfg_a)
-    cfg_b["random_state"] = 42
+    with pytest.raises(ValueError, match="selection_overrides"):
+        _slice_identity_fields(cfg, sample_size=5_000)
 
-    ident_a = _slice_identity_fields(cfg_a, sample_size=5_000)
-    ident_b = _slice_identity_fields(cfg_b, sample_size=5_000)
 
-    assert ident_a["random_state"] == 7
-    assert ident_b["random_state"] == 42
-    assert ident_a != ident_b
+def test_slice_identity_fields_honours_explicit_selected_classifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``_slice_identity_fields`` honours an explicit ``selected_classifier`` argument."""
+
+    from triage_ml.orchestration.airflow_pipeline import _slice_identity_fields
+
+    cfg = {
+        "random_state": 7,
+        "test_size": 0.2,
+        "task_type": "multiclass_text_classification",
+        "language": "en",
+    }
+    ident = _slice_identity_fields(cfg, sample_size=5_000, selected_classifier="linear_svc")
+    assert ident["selected_classifier"] == "linear_svc"

@@ -90,7 +90,12 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
         yield
 
     app = FastAPI(title="Triage ML - Prod API", lifespan=lifespan)
-    app.state.model_variant = read_runtime_variant()
+    # ``app.state.model_variant`` is single-source: the lifespan handler
+    # is the only authoritative setter. The middleware's
+    # ``_model_variant`` helper falls back to ``"sklearn"`` when this is
+    # absent (e.g. ``TestClient`` without a lifespan manager), so the
+    # early life of the app keeps emitting metrics for the default
+    # variant until the operator ships the new artifact.
     if PROMETHEUS_AVAILABLE:
         app.add_middleware(PrometheusMiddleware)  # type: ignore[arg-type]
     ip_limiter, api_key_limiter = create_limiters()
@@ -359,19 +364,25 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
                 # Singleton: fetch / build once, attach to the holder so
                 # subsequent ``/predict`` calls reuse the same
                 # InferenceSession (avoids the per-request memory leak
-                # caught in the post-Fase-2 review).
-                onnx_predictor = getattr(holder, "_onnx_predictor", None)
-                if (
-                    onnx_predictor is None
-                    or getattr(onnx_predictor, "onnx_path", None) != onnx_path
-                ):
-                    onnx_predictor = resolve_variant_loader("onnx")(onnx_path)
-                    holder._onnx_predictor = onnx_predictor  # type: ignore[attr-defined]
-                label = int(onnx_predictor.predict([payload.text])[0])
-                score_value, _score_kind = onnx_predictor.score_for(
-                    [payload.text], predicted_label=label
-                )
-                score: float | None = score_value
+                # caught in the post-Fase-2 review). Invalidation is
+                # owned by ``ModelHolder.reload_to`` which sets the
+                # attribute back to ``None`` whenever the registered
+                # version changes.
+                cached = getattr(holder, "_onnx_predictor", None)
+                if cached is None or getattr(cached, "onnx_path", None) != onnx_path:
+                    cached = resolve_variant_loader("onnx")(onnx_path)
+                    holder._onnx_predictor = cached  # type: ignore[attr-defined]
+                onnx_labels, onnx_proba, onnx_kinds = cached([payload.text])
+                label = int(onnx_labels[0])
+                if onnx_proba is not None and onnx_proba.size:
+                    try:
+                        index = list(cached.classes).index(label)
+                    except ValueError:
+                        score: float | None = None
+                    else:
+                        score = float(onnx_proba[0][index])
+                else:
+                    score: float | None = None
             else:
                 label = int(pipeline.predict([payload.text])[0])
                 score: float | None = None

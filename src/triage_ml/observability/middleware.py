@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 from starlette.requests import Request
 from starlette.responses import Response
 
+from triage_ml.dev_api.app import ALLOWED_ERROR_CODES, LANGUAGE_ERROR_CODES
 from triage_ml.observability.metrics import (
     PREDICTION_ERRORS_TOTAL,
     PROMETHEUS_AVAILABLE,
@@ -43,20 +44,12 @@ _ROUTE_TEMPLATES: tuple[tuple[str, str], ...] = (
 
 # Allow-list of public ``error_code`` values that may be used as a metric
 # label. Mirrors the values declared in
-# ``triage_ml.dev_api.app.ALLOWED_ERROR_CODES`` so the dashboard never
-# leaks an internal ``detail`` string (privacy regression test #1).
-_METRIC_ERROR_CODES = frozenset(
-    {
-        "model_not_ready",
-        "validation_failed",
-        "internal_error",
-        "prediction_failed",
-        "unsupported_language",
-        "clinician_review_required",
-        "unauthorized",
-        "forbidden",
-        "request_failed",
-    }
+# ``triage_ml.dev_api.app.ALLOWED_ERROR_CODES`` (single source of truth) so
+# the dashboard never leaks an internal ``detail`` string (privacy
+# regression test #1). ``request_failed`` is added as the HTTPException
+# fallback.
+_METRIC_ERROR_CODES: frozenset[str] = frozenset(
+    ALLOWED_ERROR_CODES | LANGUAGE_ERROR_CODES | {"request_failed"}
 )
 
 
