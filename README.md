@@ -4,7 +4,9 @@ Sistema de triagem automática de textos médicos, construído como um classific
 
 > Status: fundação, modelo baseline, API oficial, Airflow e Etapa 4 de CI/CD concluídos.
 > API, portal por papel e dashboard técnico foram validados em Docker local e no GitHub
-> Actions. Otimização, observabilidade e arquitetura em nuvem continuam em desenvolvimento.
+> Actions.
+> Otimização ONNX e observabilidade (Prometheus + Grafana) entregues (Fase 2 — Etapas 5 e 6).
+> Arquitetura em nuvem e vídeo STAR continuam em desenvolvimento.
 
 ## Equipe e responsabilidades
 
@@ -100,7 +102,56 @@ uv run pytest
 
 Para executar a plataforma, consulte [Plataforma local em Docker](#plataforma-local-em-docker).
 O Airflow possui instruções próprias em [`airflow/dags/README.md`](airflow/dags/README.md).
-Prometheus e Grafana permanecem planejados e serão adicionados sem alterar o contrato da API.
+A stack de otimização e observabilidade (Fase 2) tem overlay próprio em
+[`infra/docker-compose.yml`](infra/docker-compose.yml) e usa o target
+`runtime-observability` do `Dockerfile` (com `[observability,optimization]` extras).
+
+### Otimização e observabilidade (Fase 2 — Etapas 5 e 6)
+
+A nova DAG [`triage_ml_retraining_optimization`](airflow/dags/triage_retraining_optimization.py)
+reaproveita o pipeline de ingestão, validação e treino da Etapa 7 e itera sobre o catálogo
+`dataset_sizing: [5000, 10000, 14000]` definido em [`configs/training.yaml`](configs/training.yaml)
+(sobrescrevível em runtime via `TRIAGE_DATASET_SLICES`). Para cada slice, a DAG exporta o
+artefato sklearn em [`model.onnx`](src/triage_ml/optimization/optimize.py), publica os checksums
+em `metadata.json` e grava `reports/benchmarks/benchmark.json` comparando sklearn vs ONNX no
+mesmo probe (workload documentado em [`benchmark.py`](src/triage_ml/optimization/benchmark.py)).
+
+A API oficial ganhou:
+
+- `GET /metrics` — saída `prometheus_client`, pública nesta fase (revisitar na Etapa 8).
+- `TRIAGE_ML_MODEL_VARIANT={sklearn,onnx}` — alterna o pipeline carregado pelo
+  [`registry`](src/triage_ml/optimization/registry.py). Padrão `sklearn` para preservar o
+  deploy atual; `onnx` requer que o `model.onnx` exista ao lado do `model.joblib`.
+- O adapter ONNX implementa `predict`/`predict_proba` e cai para `decision_function` quando o
+  classificador é `LinearSVC` (sem superfície probabilística calibrada — ver ADR 0003).
+
+A stack overlay `infra/docker-compose.yml` sobe `api-sklearn`, `api-onnx`, Prometheus e
+Grafana em uma rede privada; o dashboard Grafana (provisionado em
+[`monitoring/grafana/dashboards/triage_ml.json`](monitoring/grafana/dashboards/triage_ml.json))
+compara latência, taxa de erro e throughput por `model_variant`. O script
+[`generate_observability_traffic.py`](scripts/generate_observability_traffic.py) gera carga
+sintética benigna para popular os painéis sem precisar de payload clínico.
+
+```bash
+# Subir a stack overlay (Prometheus + Grafana + duas variantes da API)
+TRIAGE_ML_API_KEY_SERVICE=svc-"$(printf '0%.0s' {1..30})" \
+TRIAGE_ML_API_KEY_DOCTOR=doc-"$(printf '0%.0s' {1..30})" \
+TRIAGE_ML_API_KEY_PATIENT=pat-"$(printf '0%.0s' {1..30})" \
+MODEL_VERSION=20260101T000000Z-0123456789ab \
+GRAFANA_ADMIN_PASSWORD=admin \
+docker compose -f infra/docker-compose.yml up -d --wait
+docker compose -f infra/docker-compose.yml ps
+uv run python scripts/generate_observability_traffic.py \
+  --sklearn-url http://127.0.0.1:8001 --onnx-url http://127.0.0.1:8002 \
+  --api-key "$TRIAGE_ML_API_KEY_DOCTOR"
+# Acompanhar no Grafana (http://127.0.0.1:3000) e Prometheus (http://127.0.0.1:9090)
+docker compose -f infra/docker-compose.yml down
+```
+
+Política de privacidade: o `text` é classificado e descartado, nunca persistido,
+nunca copiado para log, nunca copiado para label de métrica, nunca retornado em erro. As
+labels Prometheus permitidas são `route`, `method`, `status`, `model_variant`,
+`error_code` (ver [`tests/test_observability_privacy.py`](tests/test_observability_privacy.py)).
 
 ## Checklist resumido
 
@@ -112,7 +163,8 @@ Prometheus e Grafana permanecem planejados e serão adicionados sem alterar o co
   workflow remoto verde no PR #5)
 - [x] Implementar DAG Airflow funcional — Denis (execução completa e idempotência
   validadas em Docker contra o DagsHub)
-- [ ] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill
+- [x] Otimizar latência e instrumentar API/Prometheus/Grafana — Bill (variante ONNX
+  exportada, comparativo sklearn vs ONNX, /metrics na API oficial, dashboard Grafana)
 - [ ] Documentar arquitetura em nuvem — Romário
 - [~] Manter documentação detalhada — Fábio (documento vivo)
 - [ ] Gravar vídeo STAR de até cinco minutos — Romário
@@ -368,13 +420,14 @@ foi concluída com sucesso no [PR #5](https://github.com/fabiopolli/pos-ml-eng-t
 A validação detalhada das imagens está em
 [`Etapa 4 — CI/CD, Docker e testes`](docs/reports/Etapa_4_CI_CD_Docker.md).
 Os relatórios individuais das etapas concluídas estão em `docs/reports/`
-(`Etapa_1`, `Etapa_2`, `Etapa_3`, `Etapa_4` e `Etapa_8`); o status consolidado
-e os itens pendentes (cloud, otimização, vídeo STAR) vivem em
+(`Etapa_1`, `Etapa_2`, `Etapa_3`, `Etapa_4`, `Etapa_7` e `Etapa_8`); o status consolidado
+e os itens pendentes (cloud, vídeo STAR) vivem em
 [`docs/reports/Etapa_8_Cloud_video_documentacao.md`](docs/reports/Etapa_8_Cloud_video_documentacao.md).
 
 ## Plano de implementação
 
-O detalhamento completo (Fase 1 e Fase 2) está em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md). A Fase 2 — otimização ONNX, Prometheus, Grafana e dashboard — ainda não foi executada.
+O detalhamento completo (Fase 1 e Fase 2) está em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md). A Fase 2 — otimização ONNX, Prometheus, Grafana e dashboard — está implementada (vide
+seção "Otimização e observabilidade (Fase 2 — Etapas 5 e 6)" acima).
 
 ## Como colaborar com o Codex
 
