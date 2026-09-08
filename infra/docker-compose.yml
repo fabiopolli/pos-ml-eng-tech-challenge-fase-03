@@ -1,0 +1,116 @@
+# Fase 2 overlay — runs both sklearn and ONNX variants of the API alongside
+# Prometheus and Grafana. Disabled by default in production deployments; the
+# default ``docker-compose.yml`` keeps shipping the production stack only.
+#
+# Two API containers share the same image but pick a different
+# ``TRIAGE_ML_MODEL_VARIANT`` value, which lets the dashboard compare latency
+# and accuracy side by side.
+
+services:
+  api-sklearn:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime-observability
+    image: triage-ml-api-observability:local
+    environment:
+      TRIAGE_ML_API_KEY_SERVICE: ${TRIAGE_ML_API_KEY_SERVICE:?Set TRIAGE_ML_API_KEY_SERVICE}
+      TRIAGE_ML_API_KEY_DOCTOR: ${TRIAGE_ML_API_KEY_DOCTOR:?Set TRIAGE_ML_API_KEY_DOCTOR}
+      TRIAGE_ML_API_KEY_PATIENT: ${TRIAGE_ML_API_KEY_PATIENT:?Set TRIAGE_ML_API_KEY_PATIENT}
+      TRIAGE_ML_LOG_LEVEL: ${TRIAGE_ML_LOG_LEVEL:-INFO}
+      TRIAGE_ML_RATELIMIT_DEFAULT: ${TRIAGE_ML_RATELIMIT_DEFAULT:-120/minute}
+      TRIAGE_ML_RATELIMIT_PREDICT: ${TRIAGE_ML_RATELIMIT_PREDICT:-120/minute}
+      TRIAGE_ML_MODEL_VARIANT: sklearn
+      MODEL_PATH: /models/${MODEL_VERSION:?Set MODEL_VERSION (e.g. 20260905T171611Z-f2cb6f23f9cd)}/model.joblib
+    ports:
+      - "8001:8000"
+    volumes:
+      - ../models:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    networks:
+      - observability
+
+  api-onnx:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime-observability
+    image: triage-ml-api-observability:local
+    environment:
+      TRIAGE_ML_API_KEY_SERVICE: ${TRIAGE_ML_API_KEY_SERVICE:?Set TRIAGE_ML_API_KEY_SERVICE}
+      TRIAGE_ML_API_KEY_DOCTOR: ${TRIAGE_ML_API_KEY_DOCTOR:?Set TRIAGE_ML_API_KEY_DOCTOR}
+      TRIAGE_ML_API_KEY_PATIENT: ${TRIAGE_ML_API_KEY_PATIENT:?Set TRIAGE_ML_API_KEY_PATIENT}
+      TRIAGE_ML_LOG_LEVEL: ${TRIAGE_ML_LOG_LEVEL:-INFO}
+      TRIAGE_ML_RATELIMIT_DEFAULT: ${TRIAGE_ML_RATELIMIT_DEFAULT:-120/minute}
+      TRIAGE_ML_RATELIMIT_PREDICT: ${TRIAGE_ML_RATELIMIT_PREDICT:-120/minute}
+      TRIAGE_ML_MODEL_VARIANT: onnx
+      MODEL_PATH: /models/${MODEL_VERSION:?Set MODEL_VERSION (e.g. 20260905T171611Z-f2cb6f23f9cd)}/model.joblib
+    ports:
+      - "8002:8000"
+    volumes:
+      - ../models:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    restart: unless-stopped
+    networks:
+      - observability
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    volumes:
+      - ../monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle=false
+    ports:
+      - "9090:9090"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    networks:
+      - observability
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ../monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    restart: unless-stopped
+    networks:
+      - observability
+
+networks:
+  observability:
+    driver: bridge

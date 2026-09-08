@@ -61,3 +61,18 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
 
 CMD ["uvicorn", "triage_ml.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
+
+
+# Fase 2 (Etapas 5 e 6) overlay target with the [optimization] and
+# [observability] extras installed. The production API image continues to
+# ship ``runtime`` (no extras) so the Etapa 4 pipelines are not affected.
+FROM runtime-base AS runtime-observability
+
+RUN /app/.venv/bin/pip install --no-cache-dir 'prometheus-client>=0.20,<1' 'onnx>=1.15,<2' 'onnxruntime>=1.17,<2' 'skl2onnx>=1.16,<2' 2>&1 | tail -1
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+
+CMD ["uvicorn", "triage_ml.api.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]
