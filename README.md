@@ -164,6 +164,51 @@ tradução online. A `/predict` aplica uma **checagem de idioma local** com
 
 ## Como rodar localmente
 
+### Configurando o `.env` e as credenciais do DagsHub
+
+O arquivo `.env` (na raiz) é consumido por `docker-compose.yml`, `infra/docker-compose.yml`
+e `docker-compose.airflow.yml`. Ele é **local e ignorado pelo Git** — copie
+`.env.example` para `.env` e ajuste os valores:
+
+```bash
+cp .env.example .env
+```
+
+#### Variáveis essenciais
+
+| Variável | Quando preencher | Observação |
+|---|---|---|
+| `DAGSHUB_USERNAME` | Sempre que for rodar o Airflow | Usuário da conta DagsHub onde o dataset versionado fica (ex.: `deniscelclaro`). |
+| `DAGSHUB_USER_TOKEN` | Sempre que `TRIAGE_REQUIRE_AUTH=true` | Token de leitura do DagsHub (`Settings → Tokens`); **nunca** use a senha da conta. Crie um token dedicado com escopo de leitura apenas. |
+| `TRIAGE_REQUIRE_AUTH` | `true` para `docker-compose.airflow.yml` | Faz o `entrypoint.sh` falhar rápido se faltar `DAGSHUB_USERNAME`/`DAGSHUB_USER_TOKEN`. |
+| `TRIAGE_INGEST_MODE` | `git` (clone oficial) ou `local` (fallback offline) | Default `git`. Quando `local`, copia `data/medical_tc_train.csv` direto do bind-mount. |
+| `TRIAGE_INGEST_FALLBACK_LOCAL` | `true` (default) recomendado | Se o `git clone` falhar com 401/403, a DAG cai automaticamente em `local` para não travar um smoke test por token expirado. |
+| `TRIAGE_DAG_RETRIES` | `0` em dev, `2` em produção | Default `2`. Em dev (com `airflow dags test`) coloque `0` para falhar rápido sem esperar o `retry_delay`. |
+| `TRIAGE_OPTIMIZATION_ENABLED` | `false` (default) ou `true` | Habilita a DAG `triage_ml_retraining_optimization` (Fase 2). |
+| `TRIAGE_DATASET_SLICES` | Opcional | Sobrescreve `dataset_sizing` do `configs/training.yaml` (ex.: `5000,6000,7000`). Vazio = só o `sample_size` do YAML. |
+| `TRIAGE_ML_API_KEY_*` | Quando subir a stack `docker-compose.yml` | Chaves ≥32 caracteres para `doctor`/`patient`/`service`. |
+| `TRIAGE_ML_DASHBOARD_*_PASSWORD` | Quando subir o portal Streamlit | Senhas locais para o login do portal. |
+
+#### Como gerar o token de leitura no DagsHub
+
+1. Acesse `https://dagshub.com/user/settings/tokens`.
+2. Clique em **Generate New Token** com escopo **read-only** (apenas leitura de repositórios).
+3. Copie o valor gerado (40 caracteres hex) e cole em `DAGSHUB_USER_TOKEN=` no `.env`.
+4. **Não versione o `.env`** — confirme que ele continua gitignored:
+
+```bash
+git check-ignore .env   # esperado: ".env"
+```
+
+#### Sanidade rápida
+
+```bash
+# Carrega .env no shell e valida
+set -a; source .env; set +a
+echo "DAGSHUB_USERNAME=$DAGSHUB_USERNAME"
+echo "DAGSHUB_USER_TOKEN length=$(echo -n "$DAGSHUB_USER_TOKEN" | wc -c)"  # esperado: 40
+```
+
 ### Pré-requisitos
 
 - Python 3.12
@@ -180,15 +225,119 @@ uv run pytest
 
 ### Treinar um modelo
 
-```bash
-uv run triage-ml-train
-```
-
 O treino grava uma versão imutável em
 `models/YYYYMMDDTHHMMSSZ-<12hex>/` com `model.joblib`, `classes.json`,
 `metadata.json` e `summary.json` (schema validado por `schema_version: 1`).
 Para trocar de versão sem reiniciar a API de desenvolvimento, use `POST /reload`
 ou o picker do dashboard.
+
+Existem três caminhos oficiais para treinar — escolha o que melhor combina
+com seu cenário (dev local vs. integração contínua vs. produção):
+
+#### Opção 1 — CLI no host (dev local)
+
+Útil para iteração rápida no `.venv`. Exige que o CSV esteja presente localmente
+em `data/medical_tc_train.csv`. Se o arquivo estiver ausente, o CLI emite uma
+mensagem clara apontando para `--raw-csv` ou para a DAG.
+
+```bash
+# Coloque o CSV (já baixado uma vez) onde o CLI espera
+cp /caminho/do/medical_tc_train.csv data/medical_tc_train.csv
+
+# Treine
+uv run triage-ml-train
+```
+
+Para reproduzir um classificador específico (default = seleção automática entre
+`logreg` e `linear_svc` por macro-F1 em CV-5):
+
+```bash
+uv run triage-ml-train --classifier linear_svc
+```
+
+#### Opção 2 — Baixar o CSV do DagsHub e treinar via CLI
+
+Útil quando você quer o **dataset versionado** mas não precisa subir o Airflow.
+O DagsHub exige autenticação mesmo em repositórios públicos — use um token
+read-only (veja [`Configurando o `.env` e as credenciais do DagsHub`](#configurando-o-env-e-as-credenciais-do-dagshub)).
+
+```bash
+# Clone raso + sparse-checkout só do CSV
+git clone --depth 1 --filter=blob:none --sparse \
+  https://dagshub.com/deniscelclaro/pos-ml-eng-tech-challenge-fase-03.git /tmp/dataset-src
+cd /tmp/dataset-src
+git sparse-checkout set data/medical_tc_train.csv
+cp data/medical_tc_train.csv \
+  /home/bill/Codes/ML_Eng_Projects/pos-ml-eng-tech-challenge-fase-03/data/medical_tc_train.csv
+
+# Agora treine
+cd /home/bill/Codes/ML_Eng_Projects/pos-ml-eng-tech-challenge-fase-03
+uv run triage-ml-train
+```
+
+Alternativa sem `git`: a API raw do DagsHub entrega o mesmo arquivo via
+`https://dagshub.com/api/v1/repos/<owner>/<repo>/raw/<branch>/<path>`:
+
+```bash
+curl -sSL -o data/medical_tc_train.csv \
+  "https://dagshub.com/api/v1/repos/deniscelclaro/pos-ml-eng-tech-challenge-fase-03/raw/main/data/medical_tc_train.csv"
+uv run triage-ml-train
+```
+
+#### Opção 3 — DAG Airflow `triage_ml_retraining` (recomendado para CI/CD e produção)
+
+É o caminho que reproduz fielmente o aceite oficial da Etapa 7 — `git clone` da
+`main` do DagsHub + `validate` + `train` + `verify` em tasks separadas, com
+`reused=true` na re-execução quando o dataset não mudou.
+
+Pré-requisitos: `.env` configurado com `DAGSHUB_USERNAME` e `DAGSHUB_USER_TOKEN`.
+
+```bash
+# Suba o stack Airflow (porta 8080). Permita ~2 min para o healthcheck.
+docker compose -f docker-compose.airflow.yml up -d --wait
+
+# Dispare a DAG headless (use a data corrente no formato YYYY-MM-DD)
+docker compose -f docker-compose.airflow.yml exec -T airflow \
+  airflow dags test triage_ml_retraining $(date -u +%Y-%m-%d)
+
+# Acompanhe os logs das tasks
+docker compose -f docker-compose.airflow.yml exec -T airflow \
+  airflow dags test triage_ml_retraining $(date -u +%Y-%m-%d) 2>&1 | \
+  grep -E "Task succeeded|Task failed|DagRun finished|model_version"
+
+# Desligue a stack
+docker compose -f docker-compose.airflow.yml down
+```
+
+Saída esperada (com `TRIAGE_DAG_RETRIES=0` no `.env`):
+
+| Task | Estado | Observação |
+|---|---|---|
+| `ingest` | ✅ success | `git clone` autenticado da `main` do DagsHub; grava `data/medical_tc_train.csv`. |
+| `validate` | ✅ success | `prepared_rows=5000`, `classes=[1..5]`. |
+| `train` | ✅ success | Novo artefato em `models/2026…-f2cb6f23f9cd/` com `macro_f1=0.7335`. |
+| `verify` | ✅ success | Checksum do `model.joblib` validado. |
+
+Em uma segunda execução idêntica, `train` retorna `reused=True` (a DAG encontra o
+artefato existente via `find_reusable_artifact` e não re-treina). Para forçar
+re-treino, basta alterar `sample_size`/`random_state` no `configs/training.yaml`.
+
+**Disparo alternativo via UI**: abra `http://localhost:8080` (login `admin`/`admin`
+no primeiro start), procure `triage_ml_retraining` e clique em **Trigger DAG**.
+
+> **Detalhes das tasks**: ver [`airflow/dags/triage_retraining.py`](airflow/dags/triage_retraining.py)
+> e a Etapa 7 em [`docs/reports/Etapa_7_Orquestração_de_retreino.md`](docs/reports/Etapa_7_Orquestração_de_retreino.md).
+
+**Solução de problemas comuns**:
+
+- `PermissionError` em `data/`, `models/` ou `reports/` → o contêiner roda como
+  `airflow (uid=50000)` e o host precisa liberar escrita. Em dev local:
+  `chmod 777 data models reports` antes do `up -d`.
+- `Authentication failed for 'https://dagshub.com/...'` → confira `DAGSHUB_USER_TOKEN`
+  no `.env` (deve ter 40 chars hex). Em dev, você pode definir
+  `TRIAGE_INGEST_FALLBACK_LOCAL=true` para cair no modo `local` automaticamente.
+- DAG fica em `up_for_retry` por minutos → defina `TRIAGE_DAG_RETRIES=0` no `.env`
+  para `airflow dags test` falhar rápido.
 
 ### Subir a API de desenvolvimento
 
