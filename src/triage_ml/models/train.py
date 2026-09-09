@@ -330,7 +330,16 @@ def run_training(
         raise ValueError(f"Unsupported classifier {classifier!r}; valid: {VALID_CLASSIFIERS}")
 
     raw_csv_path = Path(raw_csv_path)
-    raw_csv_bytes = raw_csv_path.read_bytes()
+    try:
+        raw_csv_bytes = raw_csv_path.read_bytes()
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"raw dataset CSV not found at {raw_csv_path}. "
+            "Provide it locally (e.g. download from Kaggle into "
+            "data/medical_tc_train.csv), pass --raw-csv <path>, or run the "
+            "triage_ml_retraining DAG which ingests the dataset from "
+            "DATA_REPOSITORY_URL via ingest_from_git."
+        ) from exc
     raw = pd.read_csv(io.BytesIO(raw_csv_bytes))
     canonical, report = prepare_dataset(raw, sample_size=sample, random_state=seed)
     train_df, test_df = split_dataset(canonical, test_size=test_frac, random_state=seed)

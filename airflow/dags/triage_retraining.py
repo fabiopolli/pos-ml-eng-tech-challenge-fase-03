@@ -34,6 +34,9 @@ def _require_auth_credentials() -> tuple[str, str]:
     return username, token
 
 
+_DAG_RETRIES = int(os.environ.get("TRIAGE_DAG_RETRIES", "2"))
+
+
 @dag(
     dag_id="triage_ml_retraining",
     description="Ingest, validate, train, evaluate and persist the triage model",
@@ -41,7 +44,7 @@ def _require_auth_credentials() -> tuple[str, str]:
     start_date=datetime(2026, 1, 1, tzinfo=UTC),
     catchup=False,
     max_active_runs=1,
-    default_args={"retries": 2, "retry_delay": timedelta(minutes=2)},
+    default_args={"retries": _DAG_RETRIES, "retry_delay": timedelta(minutes=2)},
     tags=["ml", "retraining", "triage"],
 )
 def triage_ml_retraining():

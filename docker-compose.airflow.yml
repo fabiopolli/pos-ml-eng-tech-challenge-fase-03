@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: airflow/Dockerfile
-    command: standalone
-    entrypoint: ["/opt/triage-ml/entrypoint.sh", "standalone"]
+    command: ["airflow", "standalone"]
+    entrypoint: ["/opt/triage-ml/entrypoint.sh"]
     environment:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
@@ -21,6 +21,9 @@ services:
       TRIAGE_TRAINING_CONFIG: /opt/triage-ml/configs/training.yaml
       TRIAGE_OPTIMIZATION_ENABLED: ${TRIAGE_OPTIMIZATION_ENABLED:-false}
       TRIAGE_DATASET_SLICES: ${TRIAGE_DATASET_SLICES:-}
+      TRIAGE_INGEST_MODE: ${TRIAGE_INGEST_MODE:-git}
+      TRIAGE_DATA_DIR: ${TRIAGE_DATA_DIR:-/opt/triage-ml/data}
+      TRIAGE_DAG_RETRIES: ${TRIAGE_DAG_RETRIES:-2}
     ports:
       - "${AIRFLOW_PORT:-8080}:8080"
     volumes:

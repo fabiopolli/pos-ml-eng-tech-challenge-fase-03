@@ -30,6 +30,7 @@ data/processed/*
 models/*
 !models/README.md
 /reports/figures/*/
+reports/*/
 artifacts/
 *.joblib
 *.pkl
