@@ -54,7 +54,7 @@ def _load_sklearn(joblib_path: Path) -> Any:
     return joblib.load(joblib_path)
 
 
-def _load_onnx(onnx_path: Path) -> OnnxModelAdapter:
+def _load_onnx(onnx_path: Path | str) -> OnnxModelAdapter:
     """Load an ``OnnxModelAdapter`` from ``model.onnx`` + ``metadata.json``.
 
     Defensive against malformed manifests: classes is coerced via the
@@ -63,6 +63,7 @@ def _load_onnx(onnx_path: Path) -> OnnxModelAdapter:
     helpful error if the manifest has zero or non-int labels.
     """
 
+    onnx_path = Path(onnx_path)
     ensure_no_symlink_ancestor(onnx_path)
     if onnx_path.is_symlink() or not onnx_path.is_file():
         raise ArtifactCompatibilityError("model.onnx must be a regular file")

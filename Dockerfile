@@ -25,7 +25,22 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/src \
-    TRIAGE_ML_API_CONFIG=/app/configs/api.yaml
+    TRIAGE_ML_API_CONFIG=/app/configs/api.yaml \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8
+
+# The slim-bookworm image ships glibc but no compiled locales; the
+# onnxruntime ``StringNormalizer`` op (emitted by ``skl2onnx`` whenever
+# ``TfidfVectorizer(lowercase=True)`` is exported) hard-fails session
+# creation with ``Failed to construct locale with name:en_US.UTF-8`` if
+# the locale is missing. Generate the locale we need at build time so the
+# container is self-contained and runs without depending on the host.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y locales \
+    && sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen \
+    && locale-gen \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 triage \
     && useradd --uid 10001 --gid triage --no-create-home --shell /usr/sbin/nologin triage
