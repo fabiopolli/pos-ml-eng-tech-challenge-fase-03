@@ -1,18 +1,21 @@
 # Guia de treinamento de modelos
 
-Este guia cobre o ciclo completo de treinamento: preparação do dataset, comparação de candidatos, serialização do artefato versionado, integração com a API e retreino orquestrado.
+Este guia cobre o ciclo completo de treinamento: configuração do ambiente (`.env` + credenciais DagsHub), três caminhos oficiais para treinar (CLI local, DagsHub + CLI, DAG Airflow), comparação de candidatos, serialização do artefato versionado, integração com a API e retreino orquestrado.
+
+> Para o contexto do projeto, consulte o [README](../../README.md) e a [CHECKLIST](../CHECKLIST.md).
 
 ## Visão geral
 
 ```text
    ┌─────────────────────────┐
-   │ dataset (CSV/parquet)   │
+   │ dataset (CSV do DagsHub)│
    └─────────┬───────────────┘
              │
              ▼
-   ┌─────────────────────────┐
-   │ prepare.py (Denis/Et.1) │ → PreparationReport
-   └─────────┬───────────────┘
+   ┌────────────────────────────────────────────┐
+   │ ingestion (DAG: git clone + copy local)    │
+   │   data/medical_tc_train.csv                │
+   └─────────┬──────────────────────────────────┘
              │
              ▼
    ┌────────────────────────────────────────────┐
@@ -27,7 +30,8 @@ Este guia cobre o ciclo completo de treinamento: preparação do dataset, compar
    │ serialização imutável                      │
    │ models/YYYYMMDDTHHMMSSZ-<12hex>/          │
    │   model.joblib, classes.json,              │
-   │   metadata.json, summary.json              │
+   │   metadata.json, summary.json,             │
+   │   airflow_run.json (quando via DAG)        │
    └─────────┬──────────────────────────────────┘
              │
              ▼
@@ -45,45 +49,121 @@ Este guia cobre o ciclo completo de treinamento: preparação do dataset, compar
 
 ## Pré-requisitos
 
-- Python 3.12 com `uv` (`pip install uv`).
+- Python 3.12 com [`uv`](https://docs.astral.sh/uv/) (`pip install uv`).
 - Dependências: `uv sync --dev`.
 - Para a Fase 2 (export ONNX): `uv sync --dev --extra optimization`.
-- Dataset preparado em `data/processed/medical_tc_train.parquet` (Etapa 1).
+- Para a Fase 2 (observabilidade): `uv sync --dev --extra observability`.
+- Para rodar a DAG com ingestão do DagsHub: token de leitura (40 chars) em `DAGSHUB_USER_TOKEN` no `.env`.
 
-## Passo 1 — Preparar o dataset (uma vez)
+## Passo 0 — Configurar `.env` e credenciais DagsHub
 
-Se você ainda não rodou a Etapa 1:
+Copie o template e preencha apenas o que for usar:
 
 ```bash
-# 1. Baixar dataset bruto (Medical Abstracts TC Corpus, CC BY-SA 3.0)
-#    URL: https://www.kaggle.com/datasets/saharalaa/medical-abstracts-tc-corpus
-#    Coloque em data/raw/medical_tc_train.csv
-
-# 2. Rodar a preparação canônica
-uv run python -m triage_ml.data.prepare \
-  --input data/raw/medical_tc_train.csv \
-  --output data/processed/medical_tc_train.parquet \
-  --report reports/preparation.json
-
-# Resultado: PreparationReport com contagens verificáveis
-cat reports/preparation.json
+cp .env.example .env
 ```
 
-Resultado esperado em uma execução típica:
+| Variável | Quando preencher | Observação |
+|---|---|---|
+| `DAGSHUB_USERNAME` | Sempre que for rodar a DAG `triage_ml_retraining` | Usuário do repo DagsHub (ex.: `fabiopolli`). |
+| `DAGSHUB_USER_TOKEN` | Sempre que `TRIAGE_REQUIRE_AUTH=true` | Token de leitura do DagsHub (`Settings → Tokens`); **nunca** use a senha da conta. |
+| `TRIAGE_INGEST_MODE` | `git` (clone oficial) ou `local` (fallback offline) | Default `git`. |
+| `TRIAGE_INGEST_FALLBACK_LOCAL` | `true` (default) recomendado | Se o `git clone` falhar com 401/403, a DAG cai automaticamente em `local`. |
+| `TRIAGE_DAG_RETRIES` | `0` em dev, `2` em produção | Em `dev` com `airflow dags test`, use `0` para falhar rápido. |
+
+Como gerar o token:
+
+1. Acesse `https://dagshub.com/user/settings/tokens`.
+2. **Generate New Token** com escopo **read-only**.
+3. Cole no `.env` (40 caracteres hex). Confirme:
+
+```bash
+awk -F= '/^DAGSHUB_USER_TOKEN=/{print length($2)}' .env   # esperado: 40
+git check-ignore .env                                       # esperado: ".env"
+```
+
+Para `api-prod`, `portal-prod` e `dashboard-dev` **não** é necessário preencher as variáveis do DagsHub — eles consomem o modelo localmente em `models/<versão>/`.
+
+## Passo 1 — Obter o dataset
+
+O dataset oficial fica versionado no DagsHub: `data/medical_tc_train.csv` (`condition_label,medical_abstract`, 11.550 linhas após filtragem). Você pode obtê-lo por três caminhos, do mais “oficial” ao mais direto:
+
+### 1.1 — Pela DAG `triage_ml_retraining` (recomendado para CI/CD e produção)
+
+Pré-requisito: `.env` com credenciais DagsHub.
+
+```bash
+# Permita escrita pelo uid 50000 do container Airflow (apenas em dev)
+chmod 777 data models reports
+
+# Suba o stack
+docker compose -f docker-compose.airflow.yml --project-name triage-airflow up -d --wait
+
+# Dispare a DAG headless
+docker compose -f docker-compose.airflow.yml --project-name triage-airflow exec -T airflow \
+  airflow dags test triage_ml_retraining $(date -u +%Y-%m-%d)
+
+# Acompanhe
+docker compose -f docker-compose.airflow.yml --project-name triage-airflow exec -T airflow \
+  airflow dags test triage_ml_retraining $(date -u +%Y-%m-%d) 2>&1 | \
+  grep -E "Task succeeded|Task failed|model_version|reused"
+
+# Desligue a stack
+docker compose -f docker-compose.airflow.yml --project-name triage-airflow down
+```
+
+Saída esperada (com `TRIAGE_DAG_RETRIES=0`):
+
+| Task | Estado | Observação |
+|---|---|---|
+| `ingest` | ✅ success | `git clone` autenticado da `main` do DagsHub → `data/medical_tc_train.csv`. |
+| `validate` | ✅ success | `prepared_rows=5000`, `classes=[1..5]`. |
+| `train` | ✅ success | Artefato novo em `models/2026…-<input_hash>/` com `macro_f1=0.7335`. Em uma segunda execução idêntica, retorna `reused=True`. |
+| `verify` | ✅ success | Checksum do `model.joblib` validado. |
+
+O `airflow_run.json` produzido pela DAG registra a proveniência:
 
 ```json
 {
-  "input_rows": 11550,
-  "after_language_filter": 7489,
-  "after_dedup": 5000,
-  "sample_size": 5000,
-  "n_train": 4000,
-  "n_test": 1000,
-  "fingerprint_sha256": "..."
+  "config_file_sha256": "88567105badae4ec07660e2e5cabe3f8b36669fec5d93f7c78ecace46bdb3b4b",
+  "dataset_sha256": "ad53aebc682d6b87a5647f619a079bb446d286fdc93bf0159b812418f5758609",
+  "source_commit": "069dc330e8f5c478a82c893cc224d63734781f6f"
 }
 ```
 
-Para detalhes do contrato de preparação, leia [Etapa_1_Fundacao_dados_e_contratos.md](../reports/Etapa_1_Fundacao_dados_e_contratos.md) e [ADR 0001](../adr/0001-escolha-recorte-dataset.md).
+### 1.2 — Baixar do DagsHub e treinar via CLI (sem subir Airflow)
+
+Útil para dev local:
+
+```bash
+# API raw do DagsHub (mesmo arquivo da DAG, sem `git clone`)
+curl -sSL -o data/medical_tc_train.csv \
+  "https://dagshub.com/api/v1/repos/<owner>/<repo>/raw/main/data/medical_tc_train.csv"
+
+# Conferir
+wc -l data/medical_tc_train.csv    # esperado: 11551
+sha256sum data/medical_tc_train.csv  # esperado: ad53aebc682d6b87a5647f619a079bb446d286fdc93bf0159b812418f5758609
+```
+
+Alternativa com sparse-checkout (se preferir Git):
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse \
+  https://dagshub.com/<owner>/<repo>.git /tmp/dataset-src
+cd /tmp/dataset-src
+git sparse-checkout set data/medical_tc_train.csv
+cp data/medical_tc_train.csv /home/bill/Codes/ML_Eng_Projects/pos-ml-eng-tech-challenge-fase-03/data/
+```
+
+### 1.3 — CLI no host (CSV já presente)
+
+Se o CSV já está em `data/medical_tc_train.csv` (de uma Opção 1.1 ou 1.2 anterior):
+
+```bash
+uv run triage-ml-train
+```
+
+Se o CSV estiver ausente, a CLI emite mensagem clara apontando para `--raw-csv` ou para a DAG.
 
 ## Passo 2 — Treinar (CLI canônico)
 
@@ -103,35 +183,36 @@ uv run triage-ml-train --sample-size 8000
 # Forçar random_state e versionamento custom
 uv run triage-ml-train --random-state 7 --input-hash-suffix "experiment-A"
 
+# Apontar para outro CSV (caminho arbitrário)
+uv run triage-ml-train --raw-csv /caminho/do/seu.csv
+
 # Ajuda completa
 uv run triage-ml-train --help
 ```
 
 ### O que a CLI faz
 
-1. Carrega `data/processed/medical_tc_train.parquet` (ou outro dataset configurado em `configs/training.yaml`).
+1. Carrega o CSV via `validate_dataset_file` (caminho padrão `data/medical_tc_train.csv`, configurável em [`configs/training.yaml`](../../configs/training.yaml)).
 2. Aplica split 80/20 estratificado com `random_state=42`.
-3. Executa `GridSearchCV` ou `cross_val_score` (5-fold, `scoring="f1_macro"`) sobre o **treino apenas** para cada candidato em `configs/training.yaml::selection.candidates`.
+3. Executa `cross_val_score` (5-fold, `scoring="f1_macro"`) sobre o **treino apenas** para cada candidato em `configs/training.yaml::selection.candidates`.
 4. Seleciona o vencedor por maior média de macro-F1.
 5. Re-treina o vencedor no treino inteiro.
 6. Avalia no split de teste (accuracy, balanced_accuracy, macro-F1, weighted-F1, matriz de confusão, top features).
-7. Serializa em `models/YYYYMMDDTHHMMSSZ-<12hex>/`.
-8. Grava `reports/figures/<model_version>/` com confusion matrix e top features.
+7. Serializa em `models/YYYYMMDDTHHMMSSZ-<12hex>/` com `validate_artifact_bundle` (schema_version=1).
+8. Grava `reports/figures/<model_version>/` com confusion matrix e top features (quando `report_outputs=true`).
 
-### Exemplo de saída
+### Exemplo de saída real
 
 ```text
 $ uv run triage-ml-train
-[prepare] loading data/processed/medical_tc_train.parquet (5000 rows)
-[cv] logreg        cv_macro_f1=0.7319 ± 0.0098
-[cv] linear_svc    cv_macro_f1=0.7335 ± 0.0102  ← winner
-[train] linear_svc on 4000 samples
-[eval]  test_macro_f1=0.7296
-[save]  models/20260905T171611Z-f2cb6f23f9cd/
-         model.joblib classes.json metadata.json summary.json
-[figs]  reports/figures/20260905T171611Z-f2cb6f23f9cd/
-         08_confusion_matrix_linear_svc.png
-         08_top_features_linear_svc.png
+version: 20260909T234701Z-f2cb6f23f9cd (linear_svc)
+n_train=4000 n_test=1000
+accuracy=0.7520
+balanced_accuracy=0.7281
+macro_f1=0.7335
+weighted_f1=0.7494
+artifact: models/20260909T234701Z-f2cb6f23f9cd/model.joblib
+metadata: models/20260909T234701Z-f2cb6f23f9cd/metadata.json
 ```
 
 ### Modelo final selecionado
@@ -141,7 +222,7 @@ A escolha do `LinearSVC` foi feita na Etapa 2 com base em macro-F1 no split de t
 | Modelo | macro-F1 (CV treino) | macro-F1 (teste) |
 |---|---:|---:|
 | `LogisticRegression(class_weight="balanced")` | 0.7319 ± 0.0098 | 0.7280 |
-| `LinearSVC(class_weight="balanced")` | **0.7335 ± 0.0102** | **0.7296** |
+| `LinearSVC(class_weight="balanced")` | **0.7335 ± 0.0102** | **0.7335** |
 
 Justificativa completa em [Etapa_2_Modelo_baseline_e_serialização.md](../reports/Etapa_2_Modelo_baseline_e_serialização.md).
 
@@ -152,7 +233,15 @@ Justificativa completa em [Etapa_2_Modelo_baseline_e_serialização.md](../repor
 ls -la models/
 
 # Inspecionar manifesto de uma versão
-cat models/20260905T171611Z-f2cb6f23f9cd/metadata.json | jq
+jq . models/20260909T234701Z-f2cb6f23f9cd/metadata.json
+
+# Validação programática
+uv run python -c "
+from pathlib import Path
+from triage_ml.models.artifact import validate_artifact_bundle
+m = validate_artifact_bundle(Path('models/20260909T234701Z-f2cb6f23f9cd/model.joblib'))
+print(m['model_version'], m['selection']['best_classifier'], m['metrics']['macro_f1'])
+"
 ```
 
 Schema resumido do `metadata.json` (validado por `schema_version: 1`):
@@ -160,7 +249,7 @@ Schema resumido do `metadata.json` (validado por `schema_version: 1`):
 ```json
 {
   "schema_version": 1,
-  "model_version": "20260905T171611Z-f2cb6f23f9cd",
+  "model_version": "20260909T234701Z-f2cb6f23f9cd",
   "model_name": "tfidf_linear_svc",
   "task_type": "text_classification",
   "language": "en",
@@ -176,37 +265,45 @@ Schema resumido do `metadata.json` (validado por `schema_version: 1`):
   "n_train": 4000,
   "n_test": 1000,
   "metrics": {
-    "accuracy": 0.7460,
-    "balanced_accuracy": 0.7221,
-    "macro_f1": 0.7296,
-    "weighted_f1": 0.7438
+    "accuracy": 0.7520,
+    "balanced_accuracy": 0.7281,
+    "macro_f1": 0.7335,
+    "weighted_f1": 0.7494
   },
   "preprocessing": {
-    "tfidf": { "ngram_range": [1, 2], "min_df": 2, "max_df": 0.95, "sublinear_tf": true }
+    "tfidf": { "ngram_range": [1, 2], "min_df": 2, "max_df": 0.95, "sublinear_tf": true },
+    "classifier": "linear_svc"
   },
   "selection": {
-    "selected_classifier": "linear_svc",
-    "candidates": [
-      { "name": "logreg", "mean_macro_f1": 0.7319, "std_macro_f1": 0.0098 },
-      { "name": "linear_svc", "mean_macro_f1": 0.7335, "std_macro_f1": 0.0102 }
-    ]
+    "best_classifier": "linear_svc",
+    "candidates": {
+      "logreg":     { "mean_macro_f1": 0.7319, "std_macro_f1": 0.0098 },
+      "linear_svc": { "mean_macro_f1": 0.7335, "std_macro_f1": 0.0102 }
+    }
   },
-  "fingerprint_sha256": "...",
-  "fingerprint_file_sha256": "...",
+  "fingerprints": {
+    "raw_csv_sha256": "ad53aebc...",
+    "prepared_dataset_sha256": "ad53aebc...",
+    "train_split_sha256": "...",
+    "test_split_sha256": "...",
+    "config_sha256": "..."
+  },
+  "checksum_sha256": "...",
+  "checksum_file_sha256": "...",
   "dependency_versions": { "scikit-learn": "1.6.0", "numpy": "1.26.4", "joblib": "1.4.0" },
-  "git_commit": "abc1234...",
+  "git_commit": "...",
   "git_dirty": false,
-  "created_at": "2026-09-05T17:16:11Z"
+  "created_at": "2026-09-09T23:47:01Z"
 }
 ```
 
 Campos obrigatórios validados pelo loader (`validate_artifact_bundle`):
 
-- Estrutura: presença de `model.joblib`, `classes.json`, `metadata.json`.
-- Manifesto: `schema_version == 1`, classes inteiras, label_mapping coerente.
-- Checksum: SHA-256 do `model.joblib` confere.
-- Parâmetros: `random_state`, `n_train`, `n_test` declarados.
-- Dependências: versões de `scikit-learn`, `numpy`, `joblib` registradas.
+- **Estrutura**: presença de `model.joblib`, `classes.json`, `metadata.json`.
+- **Manifesto**: `schema_version == 1`, classes inteiras, label_mapping coerente.
+- **Checksum**: SHA-256 do `model.joblib` confere com `checksum_sha256`.
+- **Parâmetros**: `random_state`, `n_train`, `n_test` declarados.
+- **Dependências**: versões de `scikit-learn`, `numpy` (apenas `[:2]`), `scipy` (apenas `[:2]`), `joblib` registradas.
 
 ## Passo 4 — Apontar a API para a nova versão
 
@@ -220,7 +317,7 @@ curl -s -H "X-API-Key: $TRIAGE_ML_API_KEY_SERVICE" http://localhost:8000/models 
 curl -s -X POST http://localhost:8000/reload \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $TRIAGE_ML_API_KEY_SERVICE" \
-  -d '{"model_version": "20260905T171611Z-f2cb6f23f9cd"}' | jq
+  -d '{"model_version": "20260909T234701Z-f2cb6f23f9cd"}' | jq
 
 # 3. Confirmar via /health
 curl -s http://localhost:8000/health | jq
@@ -229,7 +326,7 @@ curl -s http://localhost:8000/health | jq
 ### API de desenvolvimento (uvicorn)
 
 ```bash
-export MODEL_PATH=models/20260905T171611Z-f2cb6f23f9cd/model.joblib
+export MODEL_PATH=models/20260909T234701Z-f2cb6f23f9cd/model.joblib
 uv run uvicorn triage_ml.dev_api.app:app --host 127.0.0.1 --port 8000
 ```
 
@@ -243,14 +340,12 @@ Para comparar latência sklearn vs ONNX no dashboard Grafana:
 # 1. Instalar extra de otimização (uma vez)
 uv sync --dev --extra optimization
 
-# 2. Exportar e atualizar metadata.json com checksums/fingerprint
-uv run python -c "
-from triage_ml.orchestration.airflow_pipeline import export_onnx_for_version
-export_onnx_for_version('models/20260905T171611Z-f2cb6f23f9cd', opset=17)
-"
+# 2. Re-exportar o modelo com token_pattern re2-compatível
+uv run python scripts/reexport_onnx.py --version 20260909T234701Z-f2cb6f23f9cd
 
 # 3. Conferir fingerprint em metadata.json
-jq '.optimization.optimization_fingerprint' models/20260905T171611Z-f2cb6f23f9cd/metadata.json
+jq '.optimization.optimization_fingerprint' \
+  models/20260909T234701Z-f2cb6f23f9cd/metadata.json
 # {"classifier": "linear_svc", "opset": 17, "quantized": false,
 #  "fingerprint_hash": "abc1234567890def"}
 
@@ -258,12 +353,14 @@ jq '.optimization.optimization_fingerprint' models/20260905T171611Z-f2cb6f23f9cd
 curl -s -X POST http://localhost:8000/reload \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $TRIAGE_ML_API_KEY_SERVICE" \
-  -d '{"model_version": "20260905T171611Z-f2cb6f23f9cd"}' | jq
+  -d '{"model_version": "20260909T234701Z-f2cb6f23f9cd"}' | jq
 ```
+
+> O tokenizador nativo do `onnxruntime` usa `re2` e rejeita o modificador `(?u)` que o sklearn embute no `token_pattern`. O `scripts/reexport_onnx.py` faz a troca in-memory (para `r"\b\w+\b"`) **sem** alterar `metadata.preprocessing.tfidf.token_pattern` (a divergência fica documentada apenas em `metadata.optimization.current_token_pattern`).
 
 ## Passo 6 — Automatizar via DAG (Etapa 7)
 
-A DAG `triage_ml_retraining` orquestra o ciclo completo (ingestão → validação → treino → publicação no DagsHub). Para a Fase 2, a DAG `triage_ml_retraining_optimization` itera sobre `dataset_sizing: [5000, 6000, 7000]` e materializa `optimization_<sample_size>.json` por corte.
+A DAG `triage_ml_retraining` orquestra o ciclo completo (ingestão → validação → treino → verificação). Para a Fase 2, a DAG `triage_ml_retraining_optimization` itera sobre `dataset_sizing: [5000, 6000, 7000]` e materializa `optimization_<sample_size>.json` por corte.
 
 ```bash
 # Habilitar a DAG nova (default: false para preservar o stack da Etapa 7)
@@ -314,3 +411,13 @@ acceptance:
 - **Não confiar só em `git_commit` do manifesto** — sempre conferir o checksum do `model.joblib` antes de promover uma versão para produção (`validate_artifact_bundle` faz isso).
 - **Não afrouxar `max_quality_drop_pp` sem revisão clínica** — 1 ponto percentual de queda no macro-F1 já pode representar dezenas de amostras mal classificadas por dia em produção.
 - **Sempre rodar `uv run ruff check .` e `uv run pytest tests/` antes do push** — a suíte cobre o ciclo inteiro de treino, serialização, validação de bundle e inferência.
+
+## Solução de problemas
+
+| Sintoma | Causa provável | Mitigação |
+|---|---|---|
+| `FileNotFoundError: data/medical_tc_train.csv` | CSV ausente ao usar `triage-ml-train` | Use a DAG (Opção 1.1) ou `curl` da API raw do DagsHub (Opção 1.2), ou `--raw-csv <path>`. |
+| `PermissionError` no `data/`, `models/` ou `reports/` ao subir Airflow | uid 50000 do container sem escrita no host | `chmod 777 data models reports` em dev. |
+| DAG em `up_for_retry` por minutos | `retries=2` × `retry_delay=2min` | `TRIAGE_DAG_RETRIES=0` no `.env` para dev. |
+| `401/403` no `git clone` da DAG | Token inválido/expirado | `awk -F= '/^DAGSHUB_USER_TOKEN=/{print length($2)}' .env` → esperado: 40. Como mitigação de smoke test, `TRIAGE_INGEST_FALLBACK_LOCAL=true` cai em `local`. |
+| `re2: Error parsing '(?u)\b\w+\b'` no ONNX | Tokenizer nativo do `onnxruntime` rejeita `(?u)` | Rode `scripts/reexport_onnx.py` antes de servir a variante `onnx`. |
