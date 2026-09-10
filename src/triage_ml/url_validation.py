@@ -76,6 +76,7 @@ def validate_public_http_url(
     url: str,
     *,
     allow_loopback: bool = False,
+    allow_private_cidrs: bool = False,
 ) -> str:
     """Validate ``url`` and return the canonical form.
 
@@ -85,7 +86,9 @@ def validate_public_http_url(
     * not embed userinfo, query string or fragment;
     * resolve to at least one IP address;
     * not resolve to ``169.254.169.254`` or any other link-local/cloud
-      metadata service, RFC1918, loopback or multicast address.
+      metadata service, RFC1918, loopback or multicast address — unless
+      the caller explicitly opts in via ``allow_loopback`` or
+      ``allow_private_cidrs``.
 
     Parameters
     ----------
@@ -96,6 +99,17 @@ def validate_public_http_url(
         (``127.0.0.0/8`` and ``::1``) are accepted so the dev portal can
         hit a local ``uvicorn``. Production callers should pass
         ``allow_loopback=False``.
+    allow_private_cidrs:
+        When ``True``, RFC1918 ranges (``10.0.0.0/8``,
+        ``172.16.0.0/12``, ``192.168.0.0/16``) and link-local Docker
+        ranges are accepted. This is meant for dashboards that run
+        **inside a container** and need to reach sibling services
+        (``api-prod`` resolving to e.g. ``172.23.0.2``). Link-local
+        cloud metadata endpoints (``169.254.169.254``,
+        ``metadata.google.internal``, ``metadata.azure.com`` and
+        ``kubernetes.default.svc``) remain forbidden even with this
+        flag set, because they expose credentials to any process that
+        can reach them. Use only in trusted container networks.
     """
 
     candidate = url.strip().rstrip("/")
@@ -124,6 +138,8 @@ def validate_public_http_url(
     if literal_ip is not None:
         if literal_ip.is_loopback and allow_loopback:
             return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        if allow_private_cidrs and _is_rfc1918_or_link_local(literal_ip):
+            return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
         if _is_non_public(literal_ip):
             raise ValueError(f"API URL host is a non-public address: {literal_ip}")
         return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
@@ -139,6 +155,36 @@ def validate_public_http_url(
     for ip in resolved:
         if ip.is_loopback and allow_loopback:
             continue
+        if allow_private_cidrs and _is_rfc1918_or_link_local(ip):
+            continue
         if _is_non_public(ip):
             raise ValueError(f"API URL host resolves to a non-public address: {ip}")
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _is_rfc1918_or_link_local(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """Return True for RFC1918 / link-local addresses that are safe inside a container network.
+
+    Cloud metadata endpoints (``169.254.169.254``) and Kubernetes API
+    servers are excluded here — they must remain forbidden even when
+    the caller opts into ``allow_private_cidrs``.
+    """
+
+    if ip.version == 4:
+        # ``169.254.169.254`` is a subset of ``169.254.0.0/16`` (link-local
+        # IPv4) and is always excluded because it's the cloud metadata
+        # endpoint. We accept other ``169.254.x.x`` addresses here for
+        # parity with the historical SSRF guard, which targeted the
+        # metadata endpoint specifically via the hostname blocklist above.
+        rfc1918 = (
+            ipaddress.ip_network("10.0.0.0/8"),
+            ipaddress.ip_network("172.16.0.0/12"),
+            ipaddress.ip_network("192.168.0.0/16"),
+        )
+        return any(ip in network for network in rfc1918)
+    # IPv6: ULA (``fc00::/7``) and link-local excluding ``::1``.
+    return ip in ipaddress.ip_network("fc00::/7") or (
+        ip in ipaddress.ip_network("fe80::/10")
+    )

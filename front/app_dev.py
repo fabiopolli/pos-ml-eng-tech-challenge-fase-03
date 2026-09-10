@@ -160,10 +160,26 @@ def _normalize_api_url(url: str) -> str:
     The dev dashboard is meant to hit ``http://127.0.0.1:8000`` during
     local development, so loopback is allowed. RFC1918, link-local and
     cloud metadata endpoints (``169.254.169.254``) are still rejected
-    to prevent accidental SSRF if the operator types a hostile URL.
+    to prevent accidental SSRF if the operator types a hostile URL —
+    unless the dashboard itself is running inside a container, in which
+    case reaching sibling services on the user-defined Docker network
+    is a legitimate use case. The container check is performed
+    defensively (via ``/.dockerenv`` and ``/run/.containerenv``) and the
+    cloud metadata endpoints remain forbidden even with
+    ``allow_private_cidrs=True``.
     """
 
-    return validate_public_http_url(url, allow_loopback=True)
+    in_container = os.path.exists("/.dockerenv") or os.path.exists(
+        "/run/.containerenv"
+    )
+    allow_private_cidrs = in_container or os.environ.get(
+        "TRIAGE_ML_ALLOW_PRIVATE_CIDRS", ""
+    ).lower() == "true"
+    return validate_public_http_url(
+        url,
+        allow_loopback=True,
+        allow_private_cidrs=allow_private_cidrs,
+    )
 
 
 def _check_health(api_url: str) -> ApiResponse:

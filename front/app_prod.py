@@ -89,10 +89,20 @@ def load_config(environ: Mapping[str, str] | None = None) -> DashboardConfig:
     # The browser E2E job runs both services on the same runner. Keep the
     # production default strict and make loopback support an explicit test-only
     # opt-in rather than weakening SSRF protection for real deployments.
+    # Inside a container (e.g. ``docker compose up``), the API URL resolves
+    # to an RFC1918 address on the user-defined Docker network. Auto-enable
+    # the private-CIDR allowlist only when we are clearly inside a container,
+    # so the SSRF guard stays strict for real production deployments that
+    # only ever reach public DNS.
+    in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
     allow_loopback = source.get("TRIAGE_ML_E2E_MODE", "").lower() == "true"
+    allow_private_cidrs = in_container or source.get(
+        "TRIAGE_ML_ALLOW_PRIVATE_CIDRS", ""
+    ).lower() == "true"
     api_url = validate_public_http_url(
         source.get("TRIAGE_ML_PROD_API_URL", DEFAULT_API_URL),
         allow_loopback=allow_loopback,
+        allow_private_cidrs=allow_private_cidrs,
     )
 
     return DashboardConfig(

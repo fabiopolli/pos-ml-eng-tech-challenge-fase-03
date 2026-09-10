@@ -32,6 +32,7 @@ com variáveis de outros projetos.
 | `TRIAGE_ML_DASHBOARD_PATIENT_USERNAME` | sim | usuário local do portal para login paciente |
 | `TRIAGE_ML_DASHBOARD_PATIENT_PASSWORD` | sim | senha local do portal para login paciente |
 | `TRIAGE_ML_E2E_MODE` | opcional | defina como `true` somente em testes E2E para permitir URLs `127.0.0.1`/`localhost`. Em produção real, mantenha desligada para bloquear loopback. |
+| `TRIAGE_ML_ALLOW_PRIVATE_CIDRS` | opcional | defina como `true` somente se o portal rodar dentro de container e precisar alcançar um serviço irmão em uma rede Docker privada (ex.: `172.23.0.2`). É ativada automaticamente quando o processo detecta `/.dockerenv` ou `/run/.containerenv`. Os endpoints de metadata na nuvem (`169.254.169.254`, `metadata.google.internal`, `metadata.azure.com`, `kubernetes.default.svc`) continuam bloqueados. |
 
 ### Para o dashboard técnico (`app_dev.py`)
 
@@ -40,6 +41,7 @@ com variáveis de outros projetos.
 | `TRIAGE_ML_DEV_API_URL` | sim | endpoint da API (oficial ou dev) |
 | `TRIAGE_ML_DEV_API_KEY_DOCTOR` | sim | chave de médico da API alvo |
 | `TRIAGE_ML_DEV_API_KEY_SERVICE` | sim | chave de **service** da API alvo — necessária para `GET /model-info` e `GET /models`, que exigem papel `service` ou `doctor`. Sem essa chave, o dashboard fica 401 nesses endpoints. |
+| `TRIAGE_ML_ALLOW_PRIVATE_CIDRS` | opcional | defina como `true` se o dashboard rodar dentro de container e o `TRIAGE_ML_DEV_API_URL` apontar para um serviço irmão em rede Docker privada (ex.: `172.23.0.2`). Ativada automaticamente quando o processo detecta `/.dockerenv` ou `/run/.containerenv`. |
 
 > **Importante:** mesmo contra a API oficial, o dashboard técnico envia as
 > chaves via header `X-API-Key`. A dev API (`src/triage_ml/dev_api/app.py`)
@@ -67,6 +69,12 @@ Pontos de atenção:
 - `--wait` bloqueia até que o `healthcheck` de `api-prod` retorne
   `status=ok`, evitando race conditions em que o portal tenta login antes
   da API estar pronta.
+- Quando o portal ou o dashboard rodam **dentro do container** Docker, a
+  URL da API é resolvida para um endereço RFC1918 (ex.: `172.23.0.2`).
+  O guard de SSRF detecta o ambiente via `/.dockerenv` e libera
+  automaticamente os ranges privados — não é necessário exportar
+  `TRIAGE_ML_ALLOW_PRIVATE_CIDRS`. Endpoints de metadata na nuvem
+  (`169.254.169.254` etc.) permanecem bloqueados em qualquer cenário.
 
 Acesse:
 
