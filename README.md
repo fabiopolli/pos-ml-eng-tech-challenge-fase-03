@@ -45,7 +45,7 @@ O entregável combina:
   via Playwright.
 
 A proposta de implantação em **GCP (Cloud Run)** e o vídeo STAR continuam em
-desenvolvimento — acompanhados em [Etapa 8](./docs/reports/Etapa_8_Cloud_video_documentacao.md).
+desenvolvimento — acompanhados em [`docs/plans/PLAN-api-prod.md`](./docs/plans/PLAN-api-prod.md).
 
 ---
 
@@ -66,16 +66,16 @@ por quem consome o contrato.
 
 ## Status do projeto
 
-| Etapa | Tema                                                | Responsável | Status                | Relatório                                                                                     |
+| Etapa | Tema                                                | Responsável | Status                | Relatório consolidado                                                                                     |
 |------:|-----------------------------------------------------|-------------|-----------------------|-----------------------------------------------------------------------------------------------|
-| 1     | Fundação, dados e contratos                         | Denis       | concluída             | [Etapa 1](./docs/reports/Etapa_1_Fundacao_dados_e_contratos.md)                              |
-| 2     | Modelo baseline, serialização, API de desenvolvimento | Bill      | concluída             | [Etapa 2](./docs/reports/Etapa_2_Modelo_baseline_e_serialização.md)                          |
-| 3     | API FastAPI oficial com RBAC                        | Romário     | concluída             | [Etapa 3](./docs/reports/Etapa_3_API_oficial.md)                                              |
-| 4     | CI/CD, Docker multi-stage, Playwright               | Fábio       | concluída (PR #5)     | [Etapa 4](./docs/reports/Etapa_4_CI_CD_Docker.md)                                             |
-| 5     | Otimização ONNX (`skl2onnx` opset 17)               | Bill        | concluída             | [Etapa 5](./docs/reports/Etapa_5_Otimizacao_do_modelo.md)                                     |
-| 6     | Observabilidade Prometheus/Grafana + privacidade    | Bill        | concluída             | [Etapa 6](./docs/reports/Etapa_6_Observabilidade_Prometheus_Grafana.md)                       |
-| 7     | DAG Airflow de retreino com DagsHub                 | Denis       | concluída (idempotente) | [Etapa 7](./docs/reports/Etapa_7_Orquestração_de_retreino.md)                              |
-| 8     | Arquitetura em nuvem + vídeo STAR                   | Romário     | em aberto             | [Etapa 8](./docs/reports/Etapa_8_Cloud_video_documentacao.md)                                 |
+| 1     | Fundação, dados e contratos                         | Denis       | concluída             | [`docs/dataset.md`](./docs/dataset.md) + [`docs/adr/0001-escolha-recorte-dataset.md`](./docs/adr/0001-escolha-recorte-dataset.md) |
+| 2     | Modelo baseline, serialização, API de desenvolvimento | Bill      | concluída             | [`docs/guides/GUIA-TREINAMENTO.md`](./docs/guides/GUIA-TREINAMENTO.md) + [`docs/reports/Relatorio_de_treinamento_dos_modelos.md`](./docs/reports/Relatorio_de_treinamento_dos_modelos.md) |
+| 3     | API FastAPI oficial com RBAC                        | Romário     | concluída             | [`docs/guides/GUIA-USO-API.md`](./docs/guides/GUIA-USO-API.md)                              |
+| 4     | CI/CD, Docker multi-stage, Playwright               | Fábio       | concluída (PR #5)     | [`Dockerfile`](./Dockerfile) + [`.github/workflows/`](./.github/workflows)                     |
+| 5     | Otimização ONNX (`skl2onnx` opset 17)               | Bill        | concluída             | [`reports/benchmarks/api-prod-baseline.json`](./reports/benchmarks/api-prod-baseline.json)     |
+| 6     | Observabilidade Prometheus/Grafana + privacidade    | Bill        | concluída             | [`docs/guides/GUIA-PROMETHEUS-GRAFANA.md`](./docs/guides/GUIA-PROMETHEUS-GRAFANA.md)           |
+| 7     | DAG Airflow de retreino com DagsHub                 | Denis       | concluída (idempotente) | [`airflow/dags/triage_retraining.py`](./airflow/dags/triage_retraining.py)                    |
+| 8     | Arquitetura em nuvem + vídeo STAR                   | Romário     | em aberto             | [`docs/plans/PLAN-api-prod.md`](./docs/plans/PLAN-api-prod.md)                              |
 
 Aceites oficiais fechados: **100%**. A análise cruzada item-por-item das
 Etapas 5 e 6 está em
@@ -326,7 +326,7 @@ re-treino, basta alterar `sample_size`/`random_state` no `configs/training.yaml`
 no primeiro start), procure `triage_ml_retraining` e clique em **Trigger DAG**.
 
 > **Detalhes das tasks**: ver [`airflow/dags/triage_retraining.py`](airflow/dags/triage_retraining.py)
-> e a Etapa 7 em [`docs/reports/Etapa_7_Orquestração_de_retreino.md`](docs/reports/Etapa_7_Orquestração_de_retreino.md).
+> e o plano geral em [`docs/plans/PLAN-text-classifier.md`](docs/plans/PLAN-text-classifier.md).
 
 **Solução de problemas comuns**:
 
@@ -457,6 +457,11 @@ um texto clínico sintético em inglês para apoio à triagem; a decisão final
 permanece humana. Cenários completos e credenciais demonstrativas em
 [`docs/guides/GUIA-USO-FRONTS.md`](./docs/guides/GUIA-USO-FRONTS.md).
 
+| Portal por papel (`portal-prod`, porta 8501) | Dashboard técnico (`dashboard-dev`, porta 8502) |
+|:---:|:---:|
+| ![Portal por papel](images/dashboard_prod.png) | ![Dashboard técnico](images/dashboard_dev.png) |
+| Login médico/paciente + predição sintética. | Health, modelo, política de idioma, reload. |
+
 ### Quando o `.env` precisa do DagsHub
 
 Para `api-prod`, `portal-prod` e `dashboard-dev` **não** é necessário
@@ -519,6 +524,11 @@ compara latência, taxa de erro e throughput por `model_variant`. As versões
 físicas do dashboard ficam em
 `reports/figures/triage_ml_dashboard.{json,png}` (geradas por
 [`scripts/render_observability_dashboard.py`](./scripts/render_observability_dashboard.py)).
+
+| Prometheus (porta 9090) | Grafana (porta 3000) |
+|:---:|:---:|
+| ![Prometheus targets](images/prometheus.png) | ![Grafana dashboard](images/grafana.png) |
+| Targets `api-sklearn` e `api-onnx` raspando `/metrics` a cada 5 s. | 4 painéis: requests, latência p95, error rate, baseline vs optimized. |
 
 ```bash
 # Helper escreve .env com MODEL_VERSION detectado de models/ e secrets aleatórios
