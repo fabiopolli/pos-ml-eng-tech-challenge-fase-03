@@ -175,6 +175,134 @@ def test_predict_uses_manifest_mapping_and_emits_timing(client: TestClient) -> N
     assert response.headers["x-request-id"] == body["request_id"]
 
 
+def test_predict_falls_back_to_decision_function_for_linear_svc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pipelines without ``predict_proba`` (e.g. LinearSVC) must surface the
+    per-class margin via ``decision_function`` so the dev API contract
+    matches the official API. Regression test for the score-null bug."""
+
+    monkeypatch.setattr("triage_ml.dev_api.app.REPO_ROOT", tmp_path)
+    pipeline = build_pipeline(
+        "linear_svc",
+        tfidf={"ngram_range": (1, 1), "min_df": 1, "max_df": 1.0},
+    )
+    texts = [
+        "liver tumor neoplasm",
+        "digestive stomach disease",
+        "brain nervous disorder",
+        "heart cardiovascular disease",
+        "general fever condition",
+    ] * 2
+    labels = [1, 2, 3, 4, 5] * 2
+    pipeline.fit(texts, labels)
+
+    assert not hasattr(pipeline, "predict_proba"), (
+        "fixture must use a pipeline without predict_proba to exercise the fallback"
+    )
+    assert hasattr(pipeline, "decision_function")
+
+    paths = ArtifactPaths.for_version(tmp_path / "models", VERSION)
+    paths.ensure()
+    joblib.dump(pipeline, paths.joblib)
+    write_classes(paths.classes, pipeline.classes_)
+    metadata = build_metadata(
+        model_version=VERSION,
+        model_name="tiny-linear-svc",
+        task_type="multiclass_text_classification",
+        language="en",
+        classes=list(pipeline.classes_),
+        label_mapping={
+            "1": "neoplasms",
+            "2": "digestive system diseases",
+            "3": "nervous system diseases",
+            "4": "cardiovascular diseases",
+            "5": "general pathological conditions",
+        },
+        random_state=42,
+        n_train=10,
+        n_test=5,
+        metrics={
+            "accuracy": 1.0,
+            "balanced_accuracy": 1.0,
+            "macro_f1": 1.0,
+            "weighted_f1": 1.0,
+            "per_class": {
+                str(label): {
+                    "precision": 1.0,
+                    "recall": 1.0,
+                    "f1": 1.0,
+                    "support": 1,
+                }
+                for label in range(1, 6)
+            },
+        },
+        preprocessing={
+            "vectorizer": "tfidf",
+            "tfidf": {},
+            "classifier": "linear_svc",
+            "classifier_params": {},
+        },
+        # ``validate_artifact_bundle`` recomputes ``best_classifier`` via
+        # ``max((logreg, linear_svc), key=mean_macro_f1)`` and expects the
+        # declared tie-break order to match the JSON key order. We give
+        # ``linear_svc`` a strictly higher mean so the selection is
+        # unambiguous and the manifest passes validation without forcing
+        # the test to mimic the trainer's tie-break semantics.
+        selection={
+            "metric": "macro_f1",
+            "folds": 2,
+            "candidates": {
+                "logreg": {
+                    "fold_macro_f1": [0.9, 0.9],
+                    "mean_macro_f1": 0.9,
+                    "std_macro_f1": 0.0,
+                },
+                "linear_svc": {
+                    "fold_macro_f1": [1.0, 1.0],
+                    "mean_macro_f1": 1.0,
+                    "std_macro_f1": 0.0,
+                },
+            },
+            "best_classifier": "linear_svc",
+            "selected_classifier": "linear_svc",
+            "selection_policy": "highest_mean_macro_f1",
+            "test_set_used_for_selection": False,
+        },
+        dependency_versions={
+            "python": platform.python_version(),
+            "numpy": np.__version__,
+            "scipy": scipy.__version__,
+            "scikit_learn": sklearn.__version__,
+            "joblib": joblib.__version__,
+        },
+        git_commit="0" * 40,
+        git_dirty=False,
+        fingerprints={
+            "raw_csv_sha256": DIGEST,
+            "prepared_dataset_sha256": DIGEST,
+            "train_split_sha256": DIGEST,
+            "test_split_sha256": DIGEST,
+            "config_sha256": DIGEST,
+        },
+        joblib_path=paths.joblib,
+    )
+    write_metadata(paths.metadata, metadata)
+
+    holder = ModelHolder(paths.joblib)
+    with TestClient(create_app(holder=holder)) as test_client:
+        response = test_client.post(
+            "/predict",
+            json={"text": "We report a patient with severe chest pain."},
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["score"] is not None, (
+        "LinearSVC must surface the decision_function margin; got score=null"
+    )
+    assert isinstance(body["score"], float)
+
+
 def test_client_request_id_is_never_trusted(
     client: TestClient,
 ) -> None:

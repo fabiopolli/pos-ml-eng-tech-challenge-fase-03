@@ -528,6 +528,18 @@ def create_app(
                 proba = pipeline.predict_proba([text])[0]
                 index = list(pipeline.classes_).index(label)
                 score = float(proba[index])
+            elif hasattr(pipeline, "decision_function"):
+                # LinearSVC (and friends) emit a ``decision_function`` but
+                # no calibrated probability surface. Surface the per-class
+                # margin so the contract is consistent with the official
+                # API and the ONNX variant (both fall back to the margin
+                # when ``predict_proba`` is absent).
+                margins = pipeline.decision_function([text])
+                if getattr(margins, "ndim", 1) == 1:
+                    score = float(margins[0])
+                else:
+                    index = list(pipeline.classes_).index(label)
+                    score = float(margins[0][index])
         except Exception as exc:
             request.state.predict_latency_ms = (time.perf_counter() - started) * 1000.0
             logger.error(

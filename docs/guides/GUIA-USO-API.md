@@ -296,7 +296,7 @@ Resposta (200):
 }
 ```
 
-`score` é `null` quando o classificador selecionado é `LinearSVC` (não expõe `predict_proba`); use `LogisticRegression` se a probabilidade calibrada for requisito. **Não há campo `model_variant` no payload** — a variante ativa fica em `/health` e em `GET /models.current`; o cabeçalho `X-Request-ID` permite correlacionar a predição com o variant que aparece nas métricas Prometheus (`triage_ml_request_latency_seconds{model_variant="..."}`).
+`score` é `null` quando o classificador selecionado é `LinearSVC` **e** o pipeline não tem `decision_function`; na prática isso só acontece em pipelines custom — o baseline atual (`linear_svc`) tem `decision_function`, então tanto a API oficial quanto a API dev retornam a margem (ex.: `-0.19511649276793475`). Use `LogisticRegression` se precisar de probabilidade calibrada em `[0, 1]`. **Não há campo `model_variant` no payload** — a variante ativa fica em `/health` e em `GET /models.current`; o cabeçalho `X-Request-ID` permite correlacionar a predição com o variant que aparece nas métricas Prometheus (`triage_ml_request_latency_seconds{model_variant="..."}`).
 
 Headers de resposta (sempre presentes em sucesso):
 
