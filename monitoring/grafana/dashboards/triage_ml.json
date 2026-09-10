@@ -10,6 +10,7 @@
   "links": [],
   "panels": [
     {
+      "id": 1,
       "title": "Requests by route/status",
       "type": "timeseries",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
@@ -24,6 +25,7 @@
       "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
     },
     {
+      "id": 2,
       "title": "Latency p95",
       "type": "timeseries",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
@@ -38,6 +40,7 @@
       "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
     },
     {
+      "id": 3,
       "title": "Prediction error rate",
       "type": "stat",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
@@ -53,7 +56,9 @@
       "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}
     },
     {
-      "title": "Baseline vs optimized (p95)",
+      "id": 4,
+      "title": "Baseline vs optimized (latency p50/p95/p99)",
+      "description": "Latência HTTP por variante do modelo. O comparativo offline de macro-F1 entre sklearn e ONNX fica em reports/benchmarks/dataset_sizing.json (não é coletado em tempo real pelo Prometheus).",
       "type": "table",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "gridPos": {"h": 8, "w": 18, "x": 6, "y": 8},

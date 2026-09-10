@@ -38,10 +38,13 @@ Este guia cobre a stack de observabilidade (Fase 2 — Etapa 6), do scrape do Pr
 uv run python scripts/bootstrap_observability_overlay.py
 
 # 2. Subir overlay de observabilidade (api-prod + api-onnx + prometheus + grafana)
-docker compose -f infra/docker-compose.yml up -d --wait
+#    Use sempre o mesmo -p triage-overlay nos comandos down/ps/up para que o
+#    docker compose encontre o projeto correto (o nome default derivado do
+#    arquivo seria "infra", que não bate com o estado dos volumes).
+docker compose -p triage-overlay -f infra/docker-compose.yml up -d --wait
 
 # 3. Conferir o estado dos serviços
-docker compose -f infra/docker-compose.yml ps
+docker compose -p triage-overlay -f infra/docker-compose.yml ps
 
 # 4. Gerar tráfego benigno para popular os painéis
 uv run python scripts/generate_observability_traffic.py \
@@ -55,7 +58,7 @@ uv run python scripts/generate_observability_traffic.py \
 #    Grafana:    http://localhost:3000  (admin / $GRAFANA_ADMIN_PASSWORD)
 
 # 6. Encerrar
-docker compose -f infra/docker-compose.yml down
+docker compose -p triage-overlay -f infra/docker-compose.yml down
 ```
 
 > **Por que dois containers da API?** Para isolar a comparação de latência sklearn vs ONNX no mesmo probe de carga, sem precisar de flags na API de produção. `api-sklearn` mantém `TRIAGE_ML_MODEL_VARIANT=sklearn` (default) e `api-onnx` fixa `TRIAGE_ML_MODEL_VARIANT=onnx`.
@@ -63,6 +66,10 @@ docker compose -f infra/docker-compose.yml down
 > **Armadilha frequente: `cat > .env <<EOF ... EOF` no shell.** Em alguns shells interativos o heredoc termina assim que você digita a primeira `EOF` solta, e o comando subsequente (`docker compose up`) lê um `.env` truncado. O `docker compose` então reclama `required variable MODEL_VERSION is missing a value`. Use sempre o helper [`scripts/bootstrap_observability_overlay.py`](../../scripts/bootstrap_observability_overlay.py) que escreve o arquivo de forma atômica e detecta automaticamente a versão do modelo em `models/`.
 >
 > **Segunda armadilha: `docker compose` procura o `.env` no diretório do compose file.** Quando você roda `docker compose -f infra/docker-compose.yml up`, o `docker compose` procura `infra/.env` (não `<repo>/.env`) por padrão. O helper resolve isso criando um symlink `infra/.env -> ../.env` automaticamente. O symlink é regenerado a cada invocação do helper e está listado no `.gitignore`.
+>
+> **Terceira armadilha: o bootstrap sobrescreve o `.env` da raiz.** Se você já tem um `.env` configurado para o stack `triage-fronts-guide` (com `TRIAGE_ML_DEV_API_URL=http://api-prod:8000`, `API_PORT=8010` etc.), o `bootstrap_observability_overlay.py` **substitui** esse arquivo pelo `.env` do overlay. Faça backup antes (`cp .env .env.fronts`) ou use um nome diferente para o env do overlay (`--env-file .env.overlay`).
+>
+> **Quarta armadilha: o volume do Grafana persiste entre execuções.** O Grafana usa o volume nomeado `triage-overlay_grafana-data` e armazena a senha do admin no SQLite interno. Quando o `bootstrap_observability_overlay.py` gera uma nova `GRAFANA_ADMIN_PASSWORD`, o container iniciado com a nova senha continua usando a senha antiga porque já tem admin configurado. Sintoma: login retorna `Invalid username or password` mesmo com a senha do `.env`. Mitigação: apague o volume antes de subir (`docker volume rm triage-overlay_grafana-data`) ou mantenha uma senha fixa em `.env.overlay` no repositório.
 
 ## Métricas expostas
 
@@ -189,11 +196,23 @@ Razão entre `rate(triage_ml_prediction_errors_total[5m])` e o total de requisi�
 
 Atenção: rotas `/health`, `/model-info`, `/models` e `/metrics` não entram nesse painel (não são rotas de predição).
 
-### 4. `Baseline vs optimized (p95)`
+### 4. `Baseline vs optimized (latency p50/p95/p99)`
 
-Tabela com p50/p95/p99 HTTP por `model_variant`, calculada pelo Prometheus apenas sobre `POST /predict`. O comparativo offline com macro-F1 permanece em `reports/benchmarks/dataset_sizing.json`.
+Tabela com p50/p95/p99 HTTP por `model_variant` (`sklearn` vs `onnx`), calculada
+pelo Prometheus apenas sobre `POST /predict`. É a leitura para comparar **latência
+de serving** entre as duas variantes em tempo real.
 
-Quando o benchmark controlado rodar, a tabela reflete o `Δ macro-F1` aceitável (≤ 1 pp). Veja [Etapa_5_Otimizacao_do_modelo.md](../reports/Etapa_5_Otimizacao_do_modelo.md).
+O **comparativo offline de macro-F1** entre sklearn e ONNX **não aparece nesse
+painel**: ele vem do `scripts/benchmark_predictor.py` e fica em
+[`reports/benchmarks/api-prod-baseline.json`](../reports/benchmarks/api-prod-baseline.json).
+A política de aceitação para promoção em produção é `Δ macro-F1 ≤ 1 pp` (ver
+[`configs/training.yaml`](../../configs/training.yaml) e a documentação geral em
+[`reports/Relatorio_de_treinamento_dos_modelos.md`](../reports/Relatorio_de_treinamento_dos_modelos.md)).
+
+> Se quiser cruzar latência observada (este painel) com macro-F1 offline, faça
+> um join manual entre os percentis desta tabela e os campos
+> `predictor_comparison[*].cv_macro_f1` / `predictor_comparison[*].holdout_macro_f1`
+> em `reports/benchmarks/api-prod-baseline.json`.
 
 ## Provisionamento automático
 
@@ -208,7 +227,7 @@ Para adicionar um dashboard novo sem rebuildar a imagem, basta montar o JSON em 
 
 ## Privacidade e segurança
 
-- **`text` jamais vira label** — a allow-list de labels é `route`, `method`, `status`, `model_variant`, `error_code` (e `le` para buckets do histograma). Tentativas de incluir `text`, `label_name` ou `request_id` quebram `tests/test_observability_privacy.py` e o teste de cardinalidade `tests/test_metrics_labels_respect_allowed_cardinality`.
+- **`text` jamais vira label** — a allow-list de labels é `route`, `method`, `status`, `model_variant`, `error_code` (e `le` para buckets do histograma). Tentativas de incluir `text`, `label_name` ou `request_id` quebram `tests/test_observability_privacy.py` e o teste de cardinalidade `tests/test_observability_metrics.py`.
 - **Canário de privacidade**: `PRIVACY-CANARY-CARDIOVASCULAR-RESPIRATORY 2025 with severe stenosis and arrhythmia` é procurado em `/metrics`, body de `/predict` e logs capturados por `tests/test_observability_privacy.py`. Se aparecer em qualquer um desses lugares, o teste falha.
 - **`/metrics` sem autenticação** por padrão (Fase 2). A Etapa 8 (cloud) deve colocar o endpoint atrás de reverse proxy autenticado ou movê-lo para uma porta privada.
 
