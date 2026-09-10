@@ -185,6 +185,4 @@ def _is_rfc1918_or_link_local(
         )
         return any(ip in network for network in rfc1918)
     # IPv6: ULA (``fc00::/7``) and link-local excluding ``::1``.
-    return ip in ipaddress.ip_network("fc00::/7") or (
-        ip in ipaddress.ip_network("fe80::/10")
-    )
+    return ip in ipaddress.ip_network("fc00::/7") or (ip in ipaddress.ip_network("fe80::/10"))

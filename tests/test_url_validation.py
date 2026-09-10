@@ -82,21 +82,15 @@ def test_accepts_docker_rfc1918_with_flag() -> None:
     """Dashboards running inside a container must reach sibling services on Docker networks."""
 
     assert (
-        validate_public_http_url(
-            "http://172.23.0.2:8000", allow_private_cidrs=True
-        )
+        validate_public_http_url("http://172.23.0.2:8000", allow_private_cidrs=True)
         == "http://172.23.0.2:8000"
     )
     assert (
-        validate_public_http_url(
-            "http://10.0.0.5:8000", allow_private_cidrs=True
-        )
+        validate_public_http_url("http://10.0.0.5:8000", allow_private_cidrs=True)
         == "http://10.0.0.5:8000"
     )
     assert (
-        validate_public_http_url(
-            "http://192.168.1.10:8000", allow_private_cidrs=True
-        )
+        validate_public_http_url("http://192.168.1.10:8000", allow_private_cidrs=True)
         == "http://192.168.1.10:8000"
     )
 
@@ -105,24 +99,18 @@ def test_rejects_rfc1918_without_flag() -> None:
     """Without ``allow_private_cidrs`` the historical SSRF guard still rejects RFC1918."""
 
     with pytest.raises(ValueError, match="non-public address"):
-        validate_public_http_url(
-            "http://172.23.0.2:8000", allow_loopback=False
-        )
+        validate_public_http_url("http://172.23.0.2:8000", allow_loopback=False)
 
 
 def test_rejects_cloud_metadata_even_with_flag() -> None:
     """The cloud metadata endpoint stays forbidden even with ``allow_private_cidrs=True``."""
 
     with pytest.raises(ValueError, match="forbidden"):
-        validate_public_http_url(
-            "http://169.254.169.254/latest", allow_private_cidrs=True
-        )
+        validate_public_http_url("http://169.254.169.254/latest", allow_private_cidrs=True)
 
 
 def test_rejects_kubernetes_api_even_with_flag() -> None:
     """The Kubernetes API service is blocked by hostname blocklist."""
 
     with pytest.raises(ValueError, match="forbidden"):
-        validate_public_http_url(
-            "http://kubernetes.default.svc", allow_private_cidrs=True
-        )
+        validate_public_http_url("http://kubernetes.default.svc", allow_private_cidrs=True)

@@ -96,9 +96,9 @@ def load_config(environ: Mapping[str, str] | None = None) -> DashboardConfig:
     # only ever reach public DNS.
     in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
     allow_loopback = source.get("TRIAGE_ML_E2E_MODE", "").lower() == "true"
-    allow_private_cidrs = in_container or source.get(
-        "TRIAGE_ML_ALLOW_PRIVATE_CIDRS", ""
-    ).lower() == "true"
+    allow_private_cidrs = (
+        in_container or source.get("TRIAGE_ML_ALLOW_PRIVATE_CIDRS", "").lower() == "true"
+    )
     api_url = validate_public_http_url(
         source.get("TRIAGE_ML_PROD_API_URL", DEFAULT_API_URL),
         allow_loopback=allow_loopback,

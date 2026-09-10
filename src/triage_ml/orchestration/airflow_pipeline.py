@@ -195,8 +195,7 @@ def ingest_from_git(
         # Fallback to local data dir when git authentication fails. This keeps
         # local smoke tests moving when DagsHub credentials are expired.
         if os.environ.get("TRIAGE_INGEST_FALLBACK_LOCAL", "true").lower() == "true" and (
-            "Authentication failed" in str(exc)
-            or "could not read Username" in str(exc)
+            "Authentication failed" in str(exc) or "could not read Username" in str(exc)
         ):
             return _ingest_from_local(
                 dataset_relative_path=dataset_relative_path,

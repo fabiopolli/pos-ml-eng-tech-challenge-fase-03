@@ -169,12 +169,10 @@ def _normalize_api_url(url: str) -> str:
     ``allow_private_cidrs=True``.
     """
 
-    in_container = os.path.exists("/.dockerenv") or os.path.exists(
-        "/run/.containerenv"
+    in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+    allow_private_cidrs = (
+        in_container or os.environ.get("TRIAGE_ML_ALLOW_PRIVATE_CIDRS", "").lower() == "true"
     )
-    allow_private_cidrs = in_container or os.environ.get(
-        "TRIAGE_ML_ALLOW_PRIVATE_CIDRS", ""
-    ).lower() == "true"
     return validate_public_http_url(
         url,
         allow_loopback=True,
@@ -211,9 +209,7 @@ def _get_model_info(api_url: str) -> ApiResponse:
     there.
     """
 
-    return _request_json(
-        "GET", f"{api_url.rstrip('/')}/model-info", api_key=DEV_API_KEY_SERVICE
-    )
+    return _request_json("GET", f"{api_url.rstrip('/')}/model-info", api_key=DEV_API_KEY_SERVICE)
 
 
 def _list_models(api_url: str) -> ApiResponse:
@@ -229,9 +225,7 @@ def _list_models(api_url: str) -> ApiResponse:
     production stack too.
     """
 
-    return _request_json(
-        "GET", f"{api_url.rstrip('/')}/models", api_key=DEV_API_KEY_SERVICE
-    )
+    return _request_json("GET", f"{api_url.rstrip('/')}/models", api_key=DEV_API_KEY_SERVICE)
 
 
 def _reload_model(api_url: str, model_version: str) -> ApiResponse:
