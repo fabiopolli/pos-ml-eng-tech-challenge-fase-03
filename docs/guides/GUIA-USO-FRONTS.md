@@ -15,6 +15,31 @@ Os fronts não são redundantes. O portal de produção demonstra a experiência
 papel; o dashboard de desenvolvimento expõe controles técnicos que não devem ser
 oferecidos ao paciente.
 
+## Stacks disponíveis neste repositório
+
+O repositório oferece **três stacks isolados** que podem ser combinados de
+forma independente:
+
+| Stack | Compose | Containers | Porta(s) | Quando usar |
+|---|---|---|---|---|
+| Fronts de produção | [`docker-compose.yml`](../docker-compose.yml) | `api-prod`, `portal-prod` | 8000, 8501 | Demo da RBAC e do fluxo médico/paciente |
+| Dashboard técnico | mesmo compose, `profiles: [dev]` | `dashboard-dev` (e opcionalmente `api-dev`) | 8502 | Inspeção técnica de saúde, modelo, reload e idioma |
+| Observabilidade | [`infra/docker-compose.yml`](../infra/docker-compose.yml) | `api-sklearn`, `api-onnx`, `prometheus`, `grafana` | 8001, 8002, 9090, 3000 | Métricas, latência p95, comparação baseline vs otimizado |
+
+Os dois primeiros stacks vivem no `docker-compose.yml` da raiz; o terceiro
+**vive em `infra/docker-compose.yml`** porque foi desenhado como overlay
+opcional da Fase 2 — ele sobe **uma segunda cópia** da API em duas variantes
+(sklearn e ONNX) só para coletar métricas comparáveis no Prometheus. Por
+esse motivo, ele **não** observa o `api-prod` que o stack de fronts sobe:
+são processos distintos, em networks distintas, com chaves e métricas
+separadas.
+
+Se você quer ver latência/throughput no Grafana, suba o overlay **mesmo
+quando** o stack de fronts já estiver rodando — não há conflito de portas.
+Se quiser que o Grafana mostre o tráfego do `api-prod` dos fronts, adicione
+o `api-prod` como target do Prometheus em
+`monitoring/prometheus/prometheus.yml` (fora do escopo deste guia).
+
 ## Pré-requisitos de configuração
 
 Antes de subir qualquer front, exporte (no shell) ou preencha (no `.env`)
@@ -194,17 +219,78 @@ destinada ao paciente.
 
 ## Observabilidade (Grafana + Prometheus)
 
-Com os containers de overlay rodando (`docker compose --profile observability
-up -d --wait`), há um dashboard Grafana provisionado automaticamente em
-`http://localhost:3000`:
+> **Esta seção documenta o stack `triage-overlay`, não o stack de fronts.**
+> O overlay sobe uma cópia paralela da API (sklearn + ONNX) e coleta
+> métricas dessas instâncias. Ele não observa o `api-prod` dos fronts —
+> para isso, adicione o `api-prod` como target no `prometheus.yml`.
 
-- Credenciais padrão: `admin` / `grafana-test-password-12345`
-  (configuradas via `GF_SECURITY_ADMIN_*` no `.env.overlay`).
-- Dashboard: **Triage ML — Optimization & Observability** com painéis para
-  requests por rota/status, latência p95, taxa de erro de predição e
-  comparação baseline vs otimizado.
-- Fonte de dados: Prometheus em `http://localhost:9090` raspando
-  `/metrics` das APIs `api-sklearn` e `api-onnx`.
+O stack de observabilidade vive em [`infra/`](../infra) e é independente do
+`docker-compose.yml` da raiz. Use-o quando quiser demonstrar latência,
+throughput e a comparação sklearn vs ONNX no Grafana.
+
+### Quando subir
+
+- Você precisa de um dashboard pronto para apresentar latência p95, taxa
+  de erro e métricas por rota para a banca.
+- Você quer comparar a performance da variante sklearn com a ONNX (a
+  dashboard Grafana já tem o painel **Baseline vs optimized (p95)**).
+- Você quer validar se o exporter `/metrics` da API está funcionando
+  ponta a ponta (raspagem Prometheus → datasource Grafana → painéis).
+
+Não precisa desse stack se o objetivo for apenas demonstrar login por
+papel ou inspecionar health/predição manualmente — use o stack de
+fronts (acima).
+
+### Como subir
+
+```bash
+cd infra
+docker compose --env-file ../.env.overlay -p triage-overlay up -d --build --wait
+```
+
+Quatro containers sobem: `api-sklearn` (8001), `api-onnx` (8002),
+`prometheus` (9090) e `grafana` (3000). O `.env.overlay` define
+`MODEL_VERSION`, `GRAFANA_ADMIN_USER` e `GRAFANA_ADMIN_PASSWORD` —
+ajuste se quiser.
+
+### Como acessar
+
+- Grafana: <http://localhost:3000> — login `admin` /
+  `grafana-test-password-12345` (definido em `.env.overlay`).
+- Prometheus: <http://localhost:9090> — útil para confirmar que
+  `up{job="triage-ml-api"}` está `1` em ambos os targets.
+
+O dashboard **Triage ML — Optimization & Observability** é
+provisionado via `monitoring/grafana/provisioning/` e já vem com
+4 painéis: Requests by route/status, Latency p95, Prediction error
+rate, Baseline vs optimized (p95).
+
+### Como gerar tráfego
+
+O Prometheus raspa `/metrics` a cada 15s; faça chamadas a `/predict` ou
+`/health` para popular as séries:
+
+```bash
+curl -s -X POST -H "X-API-Key: $TRIAGE_ML_API_KEY_DOCTOR" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"A 62-year-old patient with persistent chest pain."}' \
+  http://127.0.0.1:8001/predict
+curl -s -X POST -H "X-API-Key: $TRIAGE_ML_API_KEY_DOCTOR" \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"A 62-year-old patient with persistent chest pain."}' \
+  http://127.0.0.1:8002/predict
+```
+
+### Como encerrar
+
+```bash
+cd infra
+docker compose -p triage-overlay down
+```
+
+Os volumes `prometheus-data` e `grafana-data` são preservados entre
+subidas — apague manualmente (`docker volume rm triage-overlay_prometheus-data
+triage-overlay_grafana-data`) se quiser zerar o estado.
 
 ## Roteiro curto para o vídeo
 
