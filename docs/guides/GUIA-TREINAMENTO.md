@@ -412,6 +412,40 @@ acceptance:
 - **Não afrouxar `max_quality_drop_pp` sem revisão clínica** — 1 ponto percentual de queda no macro-F1 já pode representar dezenas de amostras mal classificadas por dia em produção.
 - **Sempre rodar `uv run ruff check .` e `uv run pytest tests/` antes do push** — a suíte cobre o ciclo inteiro de treino, serialização, validação de bundle e inferência.
 
+## Próximos passos (Fase 3+)
+
+O baseline atual (LinearSVC, macro-F1 = 0.7335 no test set) atende os
+requisitos do Tech Challenge. A análise em
+[`Relatorio_de_treinamento_dos_modelos.md`](../reports/Relatorio_de_treinamento_dos_modelos.md)
+listou três caminhos para evoluir, em ordem de esforço:
+
+1. **Curto prazo (1-2 sprints):** rebalanceamento da classe 3 (`nervous
+   system diseases`), tuning de `min_df`/`max_df`, features de negação
+   (NegEx) ou POS-tagging. Esforço baixo, retorno estimado +0.05 a +0.10
+   no macro-F1.
+2. **Médio prazo (1-2 meses):** substituir TF-IDF por embeddings clínicos
+   (PubMedBERT, BioBERT, ClinicalBERT) ou ensemble TF-IDF + embedding.
+   Esforço alto (download de ~440 MB, fine-tuning, integração com
+   `ModelHolder`), retorno estimado +0.10 a +0.20 no macro-F1.
+3. **Longo prazo:** LLM few-shot para classificação, active learning loop
+   integrado ao portal-médico.
+
+> **Decisão (set/2026):** o caminho 2 (PubMedBERT) **foi avaliado e
+> adiado** pela banca. O esforço de fine-tuning com 4 000 amostras e a
+> infra de serving (modelo ~440 MB, latência ~50 ms em CPU) não
+> justificam, neste momento, substituir o pipeline TF-IDF atual. O
+> baseline LinearSVC continua sendo a versão canônica recomendada para
+> produção. Quando houver mais dados rotulados ou infraestrutura de GPU,
+> a POC pode ser retomada seguindo o roteiro:
+>
+> 1. Adicionar `pubmedbert` como candidato em `configs/training.yaml`.
+> 2. Fine-tuning no mesmo split 4000/1000 do `train.py` (sem alterar o
+>    pipeline existente).
+> 3. Salvar em `models/<versão>_bert/` e comparar macro-F1 com
+>    `20260909T234701Z-f2cb6f23f9cd`.
+> 4. Se o ganho for >+0.05 macro-F1, integrar ao `train.py` canônico e
+>    retreinar via DAG Airflow.
+
 ## Solução de problemas
 
 | Sintoma | Causa provável | Mitigação |
