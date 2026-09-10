@@ -273,15 +273,29 @@ def _render_doctor_dashboard(config: DashboardConfig) -> None:
         f"Modelo `{response.body.get('model_version', '—')}` · "
         f"Request ID `{response.body.get('request_id', response.request_id or '—')}`"
     )
+    st.caption(
+        "Score = margem do LinearSVC (decision_function). Valores positivos "
+        "indicam confiança > 0.5; negativos, confiança < 0.5. Use apenas "
+        "como apoio, não como probabilidade calibrada."
+    )
     if response.server_timing:
         st.caption(f"Server-Timing: `{response.server_timing}`")
 
 
 def _format_score(value: object) -> str:
+    """Format the model's decision score for display.
+
+    The API returns ``score`` as the decision_function output of the
+    underlying LinearSVC — a signed margin that can be negative for
+    ``confidence < 0.5`` and unbounded in absolute value. Multiplying by
+    100 to render it as a percentage would mislead clinicians (e.g.
+    ``-0.195`` would become ``-19.51%``). Display it as a signed float
+    with four decimals and surface the semantic in the caption below.
+    """
     if value is None:
         return "Não disponível"
     try:
-        return f"{float(value) * 100:.2f}%"
+        return f"{float(value):+.4f}"
     except (TypeError, ValueError):
         return "Não disponível"
 

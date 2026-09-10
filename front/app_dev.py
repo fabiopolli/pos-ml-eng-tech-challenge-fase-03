@@ -186,9 +186,18 @@ def _get_model_info(api_url: str) -> ApiResponse:
     can render metrics, training details and dependency versions without
     touching the filesystem directly. Returns ``503 model_not_ready`` if
     the API has not loaded its artifact yet.
+
+    The official API requires RBAC: ``model-info`` is allowed for
+    ``service`` and ``doctor`` (both are read-only inspectors), so the
+    dashboard ships ``TRIAGE_ML_DEV_API_KEY_SERVICE`` from the server
+    process and sends it in the ``X-API-Key`` header. The dev API
+    (built without extras) ignores the header, so the call is a no-op
+    there.
     """
 
-    return _request_json("GET", f"{api_url.rstrip('/')}/model-info")
+    return _request_json(
+        "GET", f"{api_url.rstrip('/')}/model-info", api_key=DEV_API_KEY_SERVICE
+    )
 
 
 def _list_models(api_url: str) -> ApiResponse:
@@ -197,9 +206,16 @@ def _list_models(api_url: str) -> ApiResponse:
     Pure read-only endpoint listing every immutable artifact version
     available under ``models/`` (newest first) plus the version the
     API is currently serving.
+
+    Same RBAC rationale as ``_get_model_info``: ``models`` is allowed
+    for ``service`` and ``doctor``. The dashboard always carries the
+    service key so the ``Trocar modelo`` sidebar works against the
+    production stack too.
     """
 
-    return _request_json("GET", f"{api_url.rstrip('/')}/models")
+    return _request_json(
+        "GET", f"{api_url.rstrip('/')}/models", api_key=DEV_API_KEY_SERVICE
+    )
 
 
 def _reload_model(api_url: str, model_version: str) -> ApiResponse:
@@ -208,7 +224,7 @@ def _reload_model(api_url: str, model_version: str) -> ApiResponse:
     Body: ``{"model_version": "<version>"}``. On success the API swaps
     the holder to the new version (re-validating manifest + checksum)
     and returns the new ``model_version``. Errors map to ``404
-    model_not_found`` or ``500 model_incompatible``.
+    model_not_found`` or ``422 validation_failed``.
     """
 
     return _request_json(
