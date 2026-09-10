@@ -291,6 +291,11 @@ def create_app(
         request.state.started_at = time.perf_counter()
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
+        # Clinical payloads must never be cached by intermediate proxies or
+        # browsers. ``setdefault`` keeps whatever more specific header an
+        # endpoint may want to emit (``/metrics`` for example already sets
+        # ``Cache-Control: no-store`` via ``render_metrics``).
+        response.headers.setdefault("Cache-Control", "no-store")
         detect_ms = getattr(request.state, "detect_latency_ms", None)
         predict_ms = getattr(request.state, "predict_latency_ms", None)
         timing_parts: list[str] = []

@@ -40,10 +40,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OPSET = 17
 # ``re2`` (the engine inside onnxruntime's contrib Tokenizer) rejects
-# the Python-only inline modifier ``(?u)``. Plain ``\b\w+\b`` matches
-# ``[A-Za-z0-9_]+`` word boundaries — sufficient for ASCII clinical
-# abstracts and required for the ONNX runtime to load the graph.
-RE2_TOKEN_PATTERN = r"\b\w+\b"
+# the Python-only inline modifier ``(?u)``. The constant lives in
+# ``triage_ml.optimization.optimize.RE2_TOKEN_PATTERN``; this script
+# only re-exports when the persisted metadata still advertises the
+# Python-style ``(?u)`` flag.
+from triage_ml.optimization.optimize import RE2_TOKEN_PATTERN, swap_token_pattern  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -81,15 +82,6 @@ def _load_pipeline(joblib_path: Path):
         return joblib.load(joblib_path)
 
 
-def _swap_token_pattern(pipeline, new_pattern: str) -> str:
-    """Override ``tfidf.token_pattern`` in-place; return the previous value."""
-
-    tfidf = pipeline.named_steps["tfidf"]
-    previous = tfidf.token_pattern
-    tfidf.token_pattern = new_pattern
-    return previous
-
-
 def _reexport(model_dir: Path, *, dry_run: bool) -> int:
     from triage_ml.optimization.optimize import export_onnx
 
@@ -125,7 +117,7 @@ def _reexport(model_dir: Path, *, dry_run: bool) -> int:
         print("  dry-run: not re-exporting")
         return 0
 
-    _swap_token_pattern(pipeline, RE2_TOKEN_PATTERN)
+    swap_token_pattern(pipeline, RE2_TOKEN_PATTERN)
     target_path, fingerprint = export_onnx(pipeline, onnx_path, opset=DEFAULT_OPSET)
     # The production API container runs as uid 10001 (``triage``) and
     # reads the artifact from a read-only bind mount. ``umask 0o022`` plus

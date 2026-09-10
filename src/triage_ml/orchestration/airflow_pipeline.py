@@ -370,6 +370,13 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(payload, indent=2, sort_keys=True))
         os.replace(tmp_name, path)
+        # The production API container runs as uid 10001 (``triage``) and
+        # reads the artifact from a read-only bind mount. ``umask 0o077``
+        # (common in dev shells) would otherwise leave the JSON with
+        # ``0o600`` and the container would crash on the first ``open()``.
+        # ``chmod 0o644`` makes the freshly written JSON world-readable so
+        # the container can ``open()`` it regardless of the host umask.
+        path.chmod(0o644)
     except Exception:
         Path(tmp_name).unlink(missing_ok=True)
         raise
@@ -472,7 +479,13 @@ def export_onnx_for_version(
 
     import joblib
 
-    from triage_ml.optimization.optimize import export_onnx, fingerprint_dict, fingerprint_hash
+    from triage_ml.optimization.optimize import (
+        RE2_TOKEN_PATTERN,
+        export_onnx,
+        fingerprint_dict,
+        fingerprint_hash,
+        swap_token_pattern,
+    )
 
     version = Path(version_dir)
     joblib_path = version / "model.joblib"
@@ -508,7 +521,30 @@ def export_onnx_for_version(
                 "optimization": existing_optimization,
             }
 
-    target_path, fingerprint = export_onnx(pipeline, onnx_path, opset=opset)
+    # ``onnxruntime``'s contrib Tokenizer rejects the Python-only inline
+    # ``(?u)`` modifier persisted in the sklearn ``TfidfVectorizer``.
+    # ``swap_token_pattern`` overrides the in-memory pattern before
+    # ``convert_sklearn`` embeds it into the graph; the canonical sklearn
+    # artifact (``model.joblib``) and ``metadata.preprocessing.tfidf.token_pattern``
+    # are intentionally left untouched so the sklearn variant keeps loading.
+    previous_token_pattern = swap_token_pattern(pipeline, RE2_TOKEN_PATTERN)
+    target_path: Path | None = None
+    try:
+        target_path, fingerprint = export_onnx(pipeline, onnx_path, opset=opset)
+    finally:
+        # Always restore the sklearn-faithful pattern on the in-memory
+        # pipeline so a follow-up sklearn export inside the same process
+        # sees the original value.
+        swap_token_pattern(pipeline, previous_token_pattern)
+        # The production API container runs as uid 10001 (``triage``) and
+        # reads the artifact from a read-only bind mount. ``umask 0o077``
+        # (common in dev shells) would otherwise leave the freshly
+        # written ``model.onnx`` with ``0o600`` and the container would
+        # crash on the first ``open()``. ``chmod 0o644`` makes the file
+        # world-readable so the container can ``open()`` it regardless of
+        # the host umask.
+        if target_path is not None:
+            target_path.chmod(0o644)
 
     optimization_fingerprint_dict = fingerprint_dict(
         pipeline, opset=opset, quantized=False

@@ -35,6 +35,31 @@ except ImportError:  # pragma: no cover - covered by tests in optimization env
 
 DEFAULT_OPSET = 17
 
+# ``re2`` (the engine inside onnxruntime's contrib ``Tokenizer`` op)
+# rejects the Python-only inline modifier ``(?u)``. The default sklearn
+# value ``"(?u)\\b\\w+\\b"`` is therefore embedded in the ONNX graph as
+# ``"(?u)\\b\\w+\\b"`` and ``onnxruntime`` fails session creation with
+# ``Tokenizer::Can not digest tokenexp`` for the entire API. The exported
+# ONNX must use the plain ASCII ``\\b\\w+\\b`` so ``onnxruntime`` can
+# load the graph; inference diverges from the sklearn baseline only for
+# non-ASCII inputs (e.g. Portuguese clinical abstracts), which is
+# acceptable for the Fase 2 latency budget.
+RE2_TOKEN_PATTERN = r"\b\w+\b"
+
+
+def swap_token_pattern(pipeline: Any, new_pattern: str = RE2_TOKEN_PATTERN) -> str:
+    """Override ``tfidf.token_pattern`` in-place; return the previous value.
+
+    Used by ``export_onnx_for_version`` and the standalone
+    ``scripts/reexport_onnx.py`` to align the ONNX graph with
+    ``onnxruntime``'s re2-compatible regex engine.
+    """
+
+    tfidf = pipeline.named_steps["tfidf"]
+    previous = tfidf.token_pattern
+    tfidf.token_pattern = new_pattern
+    return previous
+
 
 @dataclass(frozen=True)
 class OptimizationFingerprint:

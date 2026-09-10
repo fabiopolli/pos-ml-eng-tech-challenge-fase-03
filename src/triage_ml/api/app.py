@@ -121,6 +121,11 @@ def create_app(*, holder: ModelHolder | None = None, settings: Settings | None =
 
         latency_ms = (time.perf_counter() - start_time) * 1000.0
         response.headers["X-Request-ID"] = request_id
+        # Clinical payloads must never be cached by intermediate proxies or
+        # browsers; setting ``Cache-Control: no-store`` here guarantees
+        # that even if an operator forgets to add the header in a future
+        # endpoint, the response will never leak through shared caches.
+        response.headers.setdefault("Cache-Control", "no-store")
 
         # Server-Timing: always emit the total, then enrich with per-stage
         # measurements when the handler populated ``request.state``. This
