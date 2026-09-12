@@ -21,6 +21,7 @@ dataset e do modelo até a stack de observabilidade e os pipelines de CI/CD.
 - [Como rodar localmente](#como-rodar-localmente)
 - [Plataforma em Docker](#plataforma-em-docker)
 - [Otimização e observabilidade (Fase 2)](#otimização-e-observabilidade-fase-2)
+- [Arquitetura em nuvem](#arquitetura-em-nuvem)
 - [Estrutura do repositório](#estrutura-do-repositório)
 - [Documentação complementar](#documentação-complementar)
 - [Como contribuir](#como-contribuir)
@@ -44,8 +45,9 @@ O entregável combina:
 - **CI/CD** com GitHub Actions, Docker multi-stage endurecido e testes E2E
   via Playwright.
 
-A proposta de implantação em **GCP (Cloud Run)** e o vídeo STAR continuam em
-desenvolvimento — acompanhados em [`docs/plans/PLAN-api-prod.md`](./docs/plans/PLAN-api-prod.md).
+A arquitetura de nuvem foi proposta para **GCP** e está documentada no
+[ADR 0004](./docs/adr/0004-arquitetura-cloud-gcp.md). Ela ainda não representa
+infraestrutura provisionada. O vídeo STAR continua pendente.
 
 ---
 
@@ -75,7 +77,7 @@ por quem consome o contrato.
 | 5     | Otimização ONNX (`skl2onnx` opset 17)               | Bill        | concluída             | [`reports/benchmarks/api-prod-baseline.json`](./reports/benchmarks/api-prod-baseline.json)     |
 | 6     | Observabilidade Prometheus/Grafana + privacidade    | Bill        | concluída             | [`docs/guides/GUIA-PROMETHEUS-GRAFANA.md`](./docs/guides/GUIA-PROMETHEUS-GRAFANA.md)           |
 | 7     | DAG Airflow de retreino com DagsHub                 | Denis       | concluída (idempotente) | [`airflow/dags/triage_retraining.py`](./airflow/dags/triage_retraining.py)                    |
-| 8     | Arquitetura em nuvem + vídeo STAR                   | Romário     | em aberto             | [`docs/plans/PLAN-api-prod.md`](./docs/plans/PLAN-api-prod.md)                              |
+| 8     | Arquitetura em nuvem + vídeo STAR                   | Romário     | ADR cloud em revisão; vídeo pendente | [`docs/adr/0004-arquitetura-cloud-gcp.md`](./docs/adr/0004-arquitetura-cloud-gcp.md) |
 
 Aceites oficiais fechados: **100%**. A análise cruzada item-por-item das
 Etapas 5 e 6 está em
@@ -99,9 +101,33 @@ flowchart LR
     API -. proposta real-time .-> CLOUD[GCP / Cloud Run]
 ```
 
-A direção inicial é inferência **real-time**, mantendo batch para ingestão,
-preparação e retreino. A proposta de GCP é uma hipótese arquitetural a ser
-validada em ADR por Romário; **não é infraestrutura já implantada**.
+A direção definida na proposta é inferência **real-time**, mantendo batch para
+ingestão, preparação e retreino. A implementação detalhada, incluindo
+segurança, escala, custo, Cloud Storage, Artifact Registry, Airflow/Composer e
+limites do `/reload`, está no [ADR 0004](./docs/adr/0004-arquitetura-cloud-gcp.md).
+**Nenhuma infraestrutura GCP foi provisionada ainda.**
+
+---
+
+## Arquitetura em nuvem
+
+A proposta separa o serviço online do processamento batch:
+
+| Camada | Serviço proposto | Papel |
+|---|---|---|
+| Inferência | Cloud Run | Executa portal e API FastAPI como containers stateless. |
+| Imagens | Artifact Registry | Guarda imagens privadas por digest produzidas pelo CI. |
+| Modelos | Cloud Storage | Guarda bundles imutáveis de modelo; a API só lê a versão aprovada. |
+| Retreino | Cloud Composer + Cloud Run Job | Orquestra e executa a DAG fora do caminho de predição. |
+| Segredos e identidade | Secret Manager + OIDC | Remove segredos do deploy e substitui o login local por tokens/claims validados. |
+| Operação | Cloud Logging/Monitoring | Coleta sinais da plataforma; Prometheus/Grafana local continua para comparação técnica. |
+
+Cada promoção cria uma nova revisão Cloud Run apontando para uma versão de
+modelo explícita. Isso é mais consistente do que chamar `/reload`, pois o
+endpoint altera somente a memória de uma instância. A proposta precisa da
+revisão arquitetural do time antes de provisionamento. Veja o
+[ADR 0004](./docs/adr/0004-arquitetura-cloud-gcp.md) para trade-offs, controles
+de privacidade, critérios de aceite e referências oficiais.
 
 ---
 
@@ -602,7 +628,7 @@ p50/p95/p99).
 |--------------------------------------------------------------------|-----------------------------------------------------------------------|
 | [`docs/CHECKLIST.md`](./docs/CHECKLIST.md)                          | Fonte canônica do progresso e critérios de aceite                     |
 | [`docs/plans/PLAN-text-classifier.md`](./docs/plans/PLAN-text-classifier.md) | Plano de implementação (Fases 1 e 2)                          |
-| [`docs/adr/`](./docs/adr)                                          | Decisões arquiteturais (0001 dataset, 0002 RBAC, 0003 sample-size)    |
+| [`docs/adr/`](./docs/adr)                                          | Decisões arquiteturais, incluindo a proposta GCP do ADR 0004          |
 | [`.agents/contracts/`](./.agents/contracts)                        | Contratos entre os componentes do projeto                             |
 | [`docs/guides/GUIA-USO-API.md`](./docs/guides/GUIA-USO-API.md)     | Uso detalhado da API oficial e da API de desenvolvimento              |
 | [`docs/guides/GUIA-TREINAMENTO.md`](./docs/guides/GUIA-TREINAMENTO.md) | Ciclo completo de treinamento                                     |
