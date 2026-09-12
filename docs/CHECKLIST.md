@@ -2,7 +2,7 @@
 
 Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcial, `[x]` concluído. Um item só fica concluído quando seu critério de aceite possui evidência verificável.
 
-Última atualização: 2026-09-05 — Etapa 4 concluída com CI remoto verde no PR #5.
+Última atualização: 2026-09-12 — proposta de arquitetura GCP registrada no ADR 0004; aguarda revisão arquitetural antes do provisionamento.
 
 ## Visão geral e responsáveis
 
@@ -13,7 +13,7 @@ Fonte canônica do progresso. Legenda: `[ ]` pendente, `[~]` em andamento/parcia
 - [x] CI/CD, Docker e testes — Fábio
 - [x] DAG Airflow — Denis
 - [ ] Otimização de latência e observabilidade — Bill
-- [ ] Arquitetura em nuvem — Romário
+- [~] Arquitetura em nuvem — Romário (proposta registrada; revisão pendente)
 - [~] Documentação detalhada — Fábio
 - [ ] Vídeo STAR — Romário
 
@@ -78,11 +78,18 @@ Aceite: contratos em `.agents/contracts/README.md` estáveis antes do início da
 
 ### Arquitetura em nuvem — Romário (ADR pode começar em paralelo)
 
-- [~] Direção inicial: real-time para inferência e batch para treino/re-treino.
-- [ ] Comparar opções e validar/refutar GCP Cloud Run, Artifact Registry e Cloud Storage.
-- [ ] Definir execução/orquestração do Airflow na proposta.
-- [ ] Avaliar segurança, privacidade, disponibilidade, escala e custos.
-- [ ] Registrar ADR e sintetizar decisão no README.
+- [x] Definir direção: real-time para inferência e batch para treino/re-treino.
+- [x] Comparar opções e validar a proposta GCP com Cloud Run, Artifact Registry e Cloud Storage.
+- [x] Definir Cloud Composer/Airflow como orquestrador e Cloud Run Job como executor batch de treino.
+- [x] Avaliar segurança, privacidade, disponibilidade, escala e custos.
+- [x] Registrar [ADR 0004](adr/0004-arquitetura-cloud-gcp.md) e sintetizar a proposta no [README](../README.md).
+
+**Evidência (2026-09-12):** o ADR 0004 propõe Cloud Run para portal/API,
+Artifact Registry para imagens por digest, Cloud Storage para bundles imutáveis,
+Secret Manager e identidades de serviço com privilégio mínimo, e Cloud Composer
+mais Cloud Run Job para retreino batch. A decisão não declara deploy existente;
+ela requer revisão arquitetural de Fábio e dos consumidores Denis/Bill antes de
+provisionamento ou de marcar a arquitetura como concluída.
 
 Aceite oficial (parte da Etapa 8): decisão arquitetural textual clara e coerente com batch versus real-time.
 
